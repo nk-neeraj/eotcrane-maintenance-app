@@ -37,6 +37,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
+# Sync from Google Sheets once after login to ensure fresh data
+@st.cache_data(ttl=300, show_spinner="Syncing data from Google Sheets...")
+def sync_data():
+    db.pull_all_from_gsheets()
+
+sync_data()
+
 # Authentication Module
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
@@ -53,24 +61,28 @@ if not st.session_state['logged_in']:
         submitted = st.form_submit_button("Login")
         
         if submitted:
-            user_df = pd.read_sql_query("SELECT * FROM users WHERE username = ? AND password = ?", db.get_connection(), params=(username, password))
-            if not user_df.empty:
-                st.session_state['logged_in'] = True
-                st.session_state['username'] = username
-                st.session_state['role'] = user_df.iloc[0]['role']
-                st.success("Login successful!")
+            try:
+                user_df = pd.read_sql_query("SELECT * FROM users WHERE username = ? AND password = ?", db.get_connection(), params=(username, password))
+                if not user_df.empty:
+                    st.session_state['logged_in'] = True
+                    st.session_state['username'] = username
+                    st.session_state['role'] = user_df.iloc[0]['role']
+                    st.success("Login successful!")
+                    st.rerun()
+                else:
+                    st.error("Invalid username or password.")
+            except pd.errors.DatabaseError:
+                st.error("Initializing database for the first time, please wait...")
+                import init_db
+                init_db.init_database()
+                sync_data.clear()
+                sync_data()
                 st.rerun()
-            else:
-                st.error("Invalid username or password.")
+
                 
     st.stop() # Stop execution if not logged in
 
-# Sync from Google Sheets once after login to ensure fresh data
-@st.cache_data(ttl=300, show_spinner="Syncing data from Google Sheets...")
-def sync_data():
-    db.pull_all_from_gsheets()
 
-sync_data()
 
 col_title, col_refresh, col_logout = st.columns([4, 1, 1])
 with col_title:
