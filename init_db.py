@@ -10,22 +10,31 @@ def init_database():
     print("Creating DB tables...")
     db.create_tables()
     
-    print("Loading Excel data...")
+    print("Loading data from Google Sheets instead of local Excel...")
     try:
-        xl = pd.ExcelFile(EXCEL_FILE)
-        eot_master = xl.parse("EOT_Master")
-        melted_data = xl.parse("melted_data")
-        schedule_master = xl.parse("Schedule_Master")
-        schedule_freq = dict(zip(schedule_master['Schedule'], schedule_master['Frequency']))
+        client = db.get_gsheets_client()
+        sheet = client.open_by_key(db.SPREADSHEET_ID)
+        
+        # Helper to fetch worksheet to pandas
+        def get_ws_df(title):
+            ws = sheet.worksheet(title)
+            data = ws.get_all_values()
+            return pd.DataFrame(data[1:], columns=data[0]) if data else pd.DataFrame()
+
+        eot_master = get_ws_df("EOT_Master")
+        melted_data = get_ws_df("melted_data")
+        schedule_master = get_ws_df("Schedule_Master")
+        schedule_freq = dict(zip(schedule_master['Schedule'], pd.to_numeric(schedule_master['Frequency'], errors='coerce').fillna(30)))
         
         conn = db.get_connection()
         
-        print("Populating Cranes Master...")
+        print("Populating Cranes Master from gsheets...")
         for _, row in eot_master.iterrows():
-            crane_id = str(row['MW_No'])
-            location = str(row['Location'])
-            capacity = str(row['Capacity'])
-            crane_type = str(row['Type'])
+            crane_id = str(row.get('MW_No', ''))
+            if not crane_id: continue
+            location = str(row.get('Location', ''))
+            capacity = str(row.get('Capacity', ''))
+            crane_type = str(row.get('Type', ''))
             
             # Insert into DB if not exists
             cursor = conn.cursor()
@@ -36,11 +45,12 @@ def init_database():
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (crane_id, location, capacity, crane_type, 'Unknown', 'Unknown', 'Active'))
         
-        print("Populating Maintenance Schedule...")
+        print("Populating Maintenance Schedule from gsheets...")
         for _, row in melted_data.iterrows():
-            crane_id = str(row['MW_No'])
-            sch_type = str(row['Schedule']) # e.g. S1A
-            maintenance_date = pd.to_datetime(row['Maintenance_Date'], errors='coerce')
+            crane_id = str(row.get('MW_No', ''))
+            if not crane_id: continue
+            sch_type = str(row.get('Schedule', '')) # e.g. S1A
+            maintenance_date = pd.to_datetime(row.get('Maintenance_Date'), errors='coerce')
             
             if pd.isna(maintenance_date):
                 continue
@@ -60,6 +70,10 @@ def init_database():
         
         conn.commit()
         conn.close()
+        
+        print("Fetching remaining tables from gsheets...")
+        db.pull_all_from_gsheets()
+        
         print("Database initialized successfully!")
         
     except Exception as e:

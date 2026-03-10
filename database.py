@@ -110,7 +110,7 @@ def pull_all_from_gsheets():
         conn = get_connection()
         for ws in worksheets:
             table_name = ws.title
-            if table_name in ['Maintenance_Data', 'melted_data', 'EOT_Master']:
+            if table_name in ['Maintenance_Data', 'melted_data']:
                 continue
             
             data = ws.get_all_values()
