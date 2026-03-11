@@ -5,20 +5,24 @@ from google.oauth2.service_account import Credentials
 import string
 import requests
 import base64
+import streamlit as st
+import os
+
 DB_NAME = "cmms.db"
-SPREADSHEET_ID = '19pE1liozVcvspe3WHXQLoKsZMTf-2L4o6aUm80pwx9A'
 JSON_KEY = 'plantmaintence-d2bfc889466e.json'
+
+try:
+    SPREADSHEET_ID = st.secrets["SPREADSHEET_ID"]
+    WEBHOOK_URL = st.secrets["WEBHOOK_URL"]
+except Exception:
+    SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
+    WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
 
 # Google Sheets Setup
 scopes = [
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/drive'
 ]
-
-import streamlit as st
-import os
-
-WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbwkT5VsQebs0gbQbtnkmMbAv03jWBWXpXqtKOqw0dgfDfiAR9pZTenNC5g6EYr2Fizm/exec'
 
 def upload_image_to_drive(uploaded_file):
     try:

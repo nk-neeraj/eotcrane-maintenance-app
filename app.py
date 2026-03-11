@@ -224,9 +224,9 @@ with tab1:
         temp_df['due_date_dt'] = pd.to_datetime(temp_df['next_due_date'], errors='coerce')
         temp_df['tier'] = temp_df['maintenance_type'].apply(get_tier)
         
-        # Sort so that for each crane, the first row is the most overdue (earliest date)
-        # and has the highest tier if dates are equal
-        temp_df = temp_df.sort_values(by=['crane_id', 'due_date_dt', 'tier'], ascending=[True, True, False])
+        # Sort so that for each crane, the first row is the highest schedule tier (S3 > S2 > S1)
+        # and earliest date if tiers are equal
+        temp_df = temp_df.sort_values(by=['crane_id', 'tier', 'due_date_dt'], ascending=[True, False, True])
         
         # Keep only the highest priority overdue schedule for each crane
         prioritized_df = temp_df.drop_duplicates(subset=['crane_id'], keep='first')
