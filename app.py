@@ -164,8 +164,14 @@ def evaluate_status(date_val):
         return "OK"
 
 # Fetch Main Data
-cranes_df = load_data("cranes")
-schedule_df = load_data("maintenance_schedule")
+try:
+    cranes_df = load_data("cranes")
+    schedule_df = load_data("maintenance_schedule")
+except Exception as e:
+    st.error(f"Error loading data from database: {e}")
+    st.info("Refreshing database from Google Sheets...")
+    db.pull_all_from_gsheets()
+    st.rerun()
 
 # Recalculate status dynamically based on current date
 schedule_df['status'] = schedule_df['next_due_date'].apply(evaluate_status)

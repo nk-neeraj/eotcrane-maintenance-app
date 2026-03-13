@@ -12,11 +12,13 @@ DB_NAME = "cmms.db"
 JSON_KEY = 'plantmaintence-d2bfc889466e.json'
 
 try:
-    SPREADSHEET_ID = st.secrets["SPREADSHEET_ID"]
-    WEBHOOK_URL = st.secrets["WEBHOOK_URL"]
+    SPREADSHEET_ID = st.secrets.get("SPREADSHEET_ID", "")
+    WEBHOOK_URL = st.secrets.get("WEBHOOK_URL", "")
+    INITIAL_ADMIN_PASSWORD = st.secrets.get("INITIAL_ADMIN_PASSWORD")
 except Exception:
     SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
     WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
+    INITIAL_ADMIN_PASSWORD = os.environ.get("INITIAL_ADMIN_PASSWORD")
 
 # Google Sheets Setup
 scopes = [
@@ -106,10 +108,16 @@ def push_table_to_gsheets(table_name):
 
 def pull_all_from_gsheets():
     """Pulls all tables from Google Sheets into local SQLite"""
+    create_tables() # Ensure schema exists
+    if not SPREADSHEET_ID:
+        print("WARNING: SPREADSHEET_ID not found in secrets or environment. Skipping Google Sheets sync.")
+        return
     try:
+        print(f"Starting sync from Google Sheets (ID: {SPREADSHEET_ID[:5]}...)...")
         client = get_gsheets_client()
         sheet = client.open_by_key(SPREADSHEET_ID)
         worksheets = sheet.worksheets()
+        print(f"Found {len(worksheets)} worksheets in Google Sheets.")
         
         conn = get_connection()
         for ws in worksheets:
@@ -117,6 +125,7 @@ def pull_all_from_gsheets():
             if table_name in ['Maintenance_Data', 'melted_data']:
                 continue
             
+            print(f"Syncing table: {table_name}")
             data = ws.get_all_values()
             if data and len(data) > 0:
                 headers = data[0]
@@ -133,9 +142,16 @@ def pull_all_from_gsheets():
                         df[col] = pd.to_datetime(df[col], errors='coerce', format='mixed').dt.strftime('%Y-%m-%d %H:%M:%S').fillna('')
                         
                 df.to_sql(table_name, conn, if_exists='replace', index=False)
+                print(f"Table {table_name} synced successfully with {len(records)} rows.")
         conn.close()
+        print("Google Sheets sync completed.")
     except Exception as e:
-        print(f"Error pulling from gsheets: {e}")
+        print(f"CRITICAL ERROR pulling from gsheets: {e}")
+        # Ensure tables exist even if sync fails
+        try:
+            create_tables()
+        except:
+            pass
 
 def determine_table_from_query(query):
     query = query.strip().upper()
@@ -187,4 +203,112 @@ def save_dataframe(df, table_name, index=False):
     push_table_to_gsheets(table_name)
 
 def create_tables():
-    pass
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Users table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE,
+            password TEXT,
+            role TEXT
+        )
+    """)
+    
+    # Check if admin exists, if not create default
+    cursor.execute("SELECT * FROM users WHERE username='admin'")
+    if not cursor.fetchone() and INITIAL_ADMIN_PASSWORD:
+        cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ('admin', INITIAL_ADMIN_PASSWORD, 'Admin'))
+    elif not INITIAL_ADMIN_PASSWORD:
+        print("CRITICAL: INITIAL_ADMIN_PASSWORD not set in secrets. Admin user not created.")
+    
+    # Cranes table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cranes (
+            id TEXT PRIMARY KEY,
+            location TEXT,
+            capacity TEXT,
+            type TEXT,
+            make TEXT,
+            installation_year TEXT,
+            status TEXT
+        )
+    """)
+    
+    # Maintenance Schedule table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS maintenance_schedule (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            crane_id TEXT,
+            maintenance_type TEXT,
+            last_maintenance_date TEXT,
+            next_due_date TEXT,
+            status TEXT,
+            FOREIGN KEY (crane_id) REFERENCES cranes (id)
+        )
+    """)
+    
+    # Maintenance Logs table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS maintenance_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            crane_id TEXT,
+            maintenance_type TEXT,
+            taking_over_datetime TEXT,
+            handing_over_datetime TEXT,
+            checklist_status TEXT,
+            remarks TEXT,
+            photo_path TEXT,
+            FOREIGN KEY (crane_id) REFERENCES cranes (id)
+        )
+    """)
+    
+    # Breakdown Logs table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS breakdown_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            crane_id TEXT,
+            breakdown_reported_datetime TEXT,
+            taking_over_datetime TEXT,
+            handing_over_datetime TEXT,
+            checklist_status TEXT,
+            remarks TEXT,
+            photo_path TEXT,
+            failure_assembly TEXT,
+            reported_failure_type TEXT,
+            root_cause_failure TEXT,
+            corrective_action TEXT,
+            failure_component TEXT,
+            failure_defect TEXT,
+            FOREIGN KEY (crane_id) REFERENCES cranes (id)
+        )
+    """)
+    
+    # Spare Parts table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS spare_parts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            part_name TEXT,
+            applicable_cranes TEXT,
+            stock_quantity INTEGER,
+            minimum_stock INTEGER,
+            supplier TEXT,
+            last_replacement_date TEXT,
+            remarks TEXT
+        )
+    """)
+
+    # Failure Assemblies
+    cursor.execute("CREATE TABLE IF NOT EXISTS failure_assemblies (id INTEGER PRIMARY KEY AUTOINCREMENT, assembly_name TEXT UNIQUE)")
+    # Failure Components
+    cursor.execute("CREATE TABLE IF NOT EXISTS failure_components (id INTEGER PRIMARY KEY AUTOINCREMENT, assembly_name TEXT, component_name TEXT UNIQUE)")
+    # Failure Defects
+    cursor.execute("CREATE TABLE IF NOT EXISTS failure_defects (id INTEGER PRIMARY KEY AUTOINCREMENT, component_name TEXT, defect_name TEXT UNIQUE)")
+    # Schedule Master
+    cursor.execute("CREATE TABLE IF NOT EXISTS Schedule_Master (id INTEGER PRIMARY KEY AUTOINCREMENT, Schedule TEXT UNIQUE, Frequency INTEGER)")
+
+    conn.commit()
+    conn.close()
+    print("Tables created/verified successfully.")
