@@ -55,6 +55,11 @@ if 'role' not in st.session_state:
 
 if not st.session_state['logged_in']:
     st.title("🔒 Login")
+    
+    # Check if secret is detected to help user diagnose configuration issues
+    if not db.INITIAL_ADMIN_PASSWORD:
+        st.warning("⚠️ Configuration Warning: `INITIAL_ADMIN_PASSWORD` secret not detected. Please ensure it is set in your Streamlit Cloud Secrets.")
+    
     with st.form("login_form"):
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")

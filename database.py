@@ -14,7 +14,10 @@ JSON_KEY = 'plantmaintence-d2bfc889466e.json'
 try:
     SPREADSHEET_ID = st.secrets.get("SPREADSHEET_ID", "")
     WEBHOOK_URL = st.secrets.get("WEBHOOK_URL", "")
+    # Check top-level, then nested under 'auth', then environment variables
     INITIAL_ADMIN_PASSWORD = st.secrets.get("INITIAL_ADMIN_PASSWORD")
+    if not INITIAL_ADMIN_PASSWORD and "auth" in st.secrets:
+        INITIAL_ADMIN_PASSWORD = st.secrets["auth"].get("INITIAL_ADMIN_PASSWORD")
 except Exception:
     SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
     WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
