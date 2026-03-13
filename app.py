@@ -67,7 +67,23 @@ if not st.session_state['logged_in']:
                 db.ensure_admin_exists()
                 
                 user_df = pd.read_sql_query("SELECT * FROM users WHERE LOWER(username) = ? AND password = ?", db.get_connection(), params=(username, password))
-                if not user_df.empty:
+                
+                # Check for successful DB login
+                login_success = not user_df.empty
+                
+                # --- ADMIN RESCUE FALLBACK ---
+                # If DB login fails but it's the admin user, attempt to validate directly against the Secret.
+                # This bypasses any issues with SQLite persistence or GSheet sync overwrite.
+                if not login_success and username == 'admin' and db.INITIAL_ADMIN_PASSWORD:
+                    if str(password).strip() == str(db.INITIAL_ADMIN_PASSWORD).strip():
+                        print("DEBUG LOGIN: Admin Rescue successful (matched secret directly).")
+                        st.session_state['logged_in'] = True
+                        st.session_state['username'] = 'admin'
+                        st.session_state['role'] = 'Admin'
+                        st.success("Login successful (Rescue Mode)!")
+                        st.rerun()
+                
+                if login_success:
                     st.session_state['logged_in'] = True
                     st.session_state['username'] = user_df.iloc[0]['username']
                     st.session_state['role'] = user_df.iloc[0]['role']
