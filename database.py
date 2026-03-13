@@ -141,8 +141,18 @@ def pull_all_from_gsheets():
                     if col in df.columns:
                         df[col] = pd.to_datetime(df[col], errors='coerce', format='mixed').dt.strftime('%Y-%m-%d %H:%M:%S').fillna('')
                         
-                df.to_sql(table_name, conn, if_exists='replace', index=False)
-                print(f"Table {table_name} synced successfully with {len(records)} rows.")
+                # Clear table first to perform a clean 'sync' while preserving schema
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute(f"DELETE FROM {table_name}")
+                    conn.commit()
+                    df.to_sql(table_name, conn, if_exists='append', index=False)
+                    print(f"Table {table_name} synced successfully with {len(records)} rows (preserved schema).")
+                except Exception as e_sql:
+                    # Fallback if table doesn't exist yet or columns mismatch
+                    print(f"Schema mismatch or missing table for {table_name}, re-creating: {e_sql}")
+                    df.to_sql(table_name, conn, if_exists='replace', index=False)
+                    print(f"Table {table_name} recreated via pandas (schema may be lost).")
         conn.close()
         print("Google Sheets sync completed.")
     except Exception as e:
@@ -217,11 +227,17 @@ def create_tables():
     """)
     
     # Check if admin exists, if not create default
-    cursor.execute("SELECT * FROM users WHERE username='admin'")
-    if not cursor.fetchone() and INITIAL_ADMIN_PASSWORD:
-        cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ('admin', INITIAL_ADMIN_PASSWORD, 'Admin'))
-    elif not INITIAL_ADMIN_PASSWORD:
-        print("CRITICAL: INITIAL_ADMIN_PASSWORD not set in secrets. Admin user not created.")
+    try:
+        cursor.execute("SELECT * FROM users WHERE username='admin'")
+        if not cursor.fetchone() and INITIAL_ADMIN_PASSWORD:
+            # Explicitly cast password to string to avoid potential PropgrammingError with Streamlit Secret types
+            pwd_str = str(INITIAL_ADMIN_PASSWORD)
+            cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ('admin', pwd_str, 'Admin'))
+            print("Default admin user created.")
+        elif not INITIAL_ADMIN_PASSWORD:
+            print("NOTE: INITIAL_ADMIN_PASSWORD not set in secrets. Skipping default admin creation.")
+    except Exception as e_admin:
+        print(f"Warning: Could not verify/create admin user: {e_admin}")
     
     # Cranes table
     cursor.execute("""
