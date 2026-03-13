@@ -61,16 +61,30 @@ if not st.session_state['logged_in']:
         submitted = st.form_submit_button("Login")
         
         if submitted:
+            username = username.strip().lower()
             try:
-                user_df = pd.read_sql_query("SELECT * FROM users WHERE username = ? AND password = ?", db.get_connection(), params=(username, password))
+                # Ensure the admin exists right before login attempt just in case
+                db.ensure_admin_exists()
+                
+                user_df = pd.read_sql_query("SELECT * FROM users WHERE LOWER(username) = ? AND password = ?", db.get_connection(), params=(username, password))
                 if not user_df.empty:
                     st.session_state['logged_in'] = True
-                    st.session_state['username'] = username
+                    st.session_state['username'] = user_df.iloc[0]['username']
                     st.session_state['role'] = user_df.iloc[0]['role']
                     st.success("Login successful!")
                     st.rerun()
                 else:
                     st.error("Invalid username or password.")
+                    # Serve-side logging to help diagnose issues without exposing secrets to the UI
+                    conn = db.get_connection()
+                    try:
+                        u_count = pd.read_sql_query("SELECT COUNT(*) as cnt FROM users", conn).iloc[0]['cnt']
+                        print(f"DEBUG LOGIN: Login failed for user '{username}'. Total users in DB: {u_count}")
+                        print(f"DEBUG LOGIN: INITIAL_ADMIN_PASSWORD secret is set: {db.INITIAL_ADMIN_PASSWORD is not None}")
+                    except Exception as e_debug:
+                        print(f"DEBUG LOGIN: Could not verify users table: {e_debug}")
+                    finally:
+                        conn.close()
             except pd.errors.DatabaseError:
                 st.error("Initializing database for the first time, please wait...")
                 import init_db

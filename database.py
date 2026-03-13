@@ -222,7 +222,8 @@ def ensure_admin_exists():
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        pwd_str = str(INITIAL_ADMIN_PASSWORD)
+        # Strip whitespace to prevent accidental login failures due to secret formatting
+        pwd_str = str(INITIAL_ADMIN_PASSWORD).strip()
         
         cursor.execute("SELECT * FROM users WHERE username='admin'")
         if not cursor.fetchone():
