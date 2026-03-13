@@ -12,16 +12,34 @@ DB_NAME = "cmms.db"
 JSON_KEY = 'plantmaintence-d2bfc889466e.json'
 
 try:
-    SPREADSHEET_ID = st.secrets.get("SPREADSHEET_ID", "")
-    WEBHOOK_URL = st.secrets.get("WEBHOOK_URL", "")
-    # Check top-level, then nested under 'auth', then environment variables
-    INITIAL_ADMIN_PASSWORD = st.secrets.get("INITIAL_ADMIN_PASSWORD")
+    # Safely get top-level secrets
+    def get_secret_val(key, default=""):
+        val = st.secrets.get(key, default)
+        # If the user accidentally made it a section, val will be a dict-like object
+        if hasattr(val, "values") and not isinstance(val, str):
+            # Try to get the first value from the dict
+            try:
+                val = list(val.values())[0]
+            except:
+                val = str(val)
+        return str(val).strip()
+
+    SPREADSHEET_ID = get_secret_val("SPREADSHEET_ID", "")
+    WEBHOOK_URL = get_secret_val("WEBHOOK_URL", "")
+    INITIAL_ADMIN_PASSWORD = get_secret_val("INITIAL_ADMIN_PASSWORD") or get_secret_val("ADMIN_PASSWORD")
+    
+    # Check for secrets inside 'auth' section if not found at top level
     if not INITIAL_ADMIN_PASSWORD and "auth" in st.secrets:
-        INITIAL_ADMIN_PASSWORD = st.secrets["auth"].get("INITIAL_ADMIN_PASSWORD")
-except Exception:
+        auth_sec = st.secrets["auth"]
+        if hasattr(auth_sec, "get"):
+            INITIAL_ADMIN_PASSWORD = str(auth_sec.get("INITIAL_ADMIN_PASSWORD") or auth_sec.get("password") or auth_sec.get("ADMIN_PASSWORD", "")).strip()
+        else:
+            INITIAL_ADMIN_PASSWORD = str(auth_sec).strip()
+except Exception as e:
+    print(f"DEBUG: st.secrets access failed: {e}")
     SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
     WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
-    INITIAL_ADMIN_PASSWORD = os.environ.get("INITIAL_ADMIN_PASSWORD")
+    INITIAL_ADMIN_PASSWORD = os.environ.get("INITIAL_ADMIN_PASSWORD") or os.environ.get("ADMIN_PASSWORD")
 
 # Google Sheets Setup
 scopes = [
@@ -116,7 +134,8 @@ def pull_all_from_gsheets():
         print("WARNING: SPREADSHEET_ID not found in secrets or environment. Skipping Google Sheets sync.")
         return
     try:
-        print(f"Starting sync from Google Sheets (ID: {SPREADSHEET_ID[:5]}...)...")
+        short_id = str(SPREADSHEET_ID)[:5] if SPREADSHEET_ID else "NONE"
+        print(f"Starting sync from Google Sheets (ID: {short_id}...)...")
         client = get_gsheets_client()
         sheet = client.open_by_key(SPREADSHEET_ID)
         worksheets = sheet.worksheets()

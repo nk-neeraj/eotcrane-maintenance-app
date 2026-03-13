@@ -2,7 +2,7 @@ import pandas as pd
 import sqlite3
 import os
 from datetime import timedelta
-import database as db
+import db as db
 
 EXCEL_FILE = "Schedule  date of EOT Crane.xlsx"
 

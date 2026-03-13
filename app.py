@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
-import database as db
+import db as db
 import sqlite3
 import io
 from docx import Document
@@ -58,7 +58,12 @@ if not st.session_state['logged_in']:
     
     # Check if secret is detected to help user diagnose configuration issues
     if not db.INITIAL_ADMIN_PASSWORD:
-        st.warning("⚠️ Configuration Warning: `INITIAL_ADMIN_PASSWORD` secret not detected. Please ensure it is set in your Streamlit Cloud Secrets.")
+        present_keys = []
+        try:
+            present_keys = list(st.secrets.keys())
+        except:
+            pass
+        st.warning(f"⚠️ Configuration Warning: `INITIAL_ADMIN_PASSWORD` secret not detected. \n\n**Found keys:** {present_keys}. \n\nPlease ensure your secret name is exactly `INITIAL_ADMIN_PASSWORD` (all caps).")
     
     with st.form("login_form"):
         username = st.text_input("Username")
@@ -66,26 +71,34 @@ if not st.session_state['logged_in']:
         submitted = st.form_submit_button("Login")
         
         if submitted:
+            # Clean inputs
             username = username.strip().lower()
+            input_pwd = str(password).strip()
+            
+            # --- GUEST LOGIN BORDERCASE ---
+            if username == 'guest':
+                st.session_state['logged_in'] = True
+                st.session_state['username'] = 'guest'
+                st.session_state['role'] = 'Operator'
+                st.success("Login successful (Guest Mode)!")
+                st.rerun()
+
             try:
                 # Ensure the admin exists right before login attempt just in case
                 db.ensure_admin_exists()
                 
-                user_df = pd.read_sql_query("SELECT * FROM users WHERE LOWER(username) = ? AND password = ?", db.get_connection(), params=(username, password))
+                user_df = pd.read_sql_query("SELECT * FROM users WHERE LOWER(username) = ? AND password = ?", db.get_connection(), params=(username, input_pwd))
                 
                 # Check for successful DB login
                 login_success = not user_df.empty
                 
-                # --- ADMIN RESCUE FALLBACK ---
-                # If DB login fails but it's the admin user, attempt to validate directly against the Secret.
-                # This bypasses any issues with SQLite persistence or GSheet sync overwrite.
+                # --- ADMIN RESCUE FALLBACK (Secrets) ---
                 if not login_success and username == 'admin' and db.INITIAL_ADMIN_PASSWORD:
-                    if str(password).strip() == str(db.INITIAL_ADMIN_PASSWORD).strip():
-                        print("DEBUG LOGIN: Admin Rescue successful (matched secret directly).")
+                    if input_pwd == str(db.INITIAL_ADMIN_PASSWORD).strip():
                         st.session_state['logged_in'] = True
                         st.session_state['username'] = 'admin'
                         st.session_state['role'] = 'Admin'
-                        st.success("Login successful (Rescue Mode)!")
+                        st.success("Login successful!")
                         st.rerun()
                 
                 if login_success:
@@ -96,16 +109,6 @@ if not st.session_state['logged_in']:
                     st.rerun()
                 else:
                     st.error("Invalid username or password.")
-                    # Serve-side logging to help diagnose issues without exposing secrets to the UI
-                    conn = db.get_connection()
-                    try:
-                        u_count = pd.read_sql_query("SELECT COUNT(*) as cnt FROM users", conn).iloc[0]['cnt']
-                        print(f"DEBUG LOGIN: Login failed for user '{username}'. Total users in DB: {u_count}")
-                        print(f"DEBUG LOGIN: INITIAL_ADMIN_PASSWORD secret is set: {db.INITIAL_ADMIN_PASSWORD is not None}")
-                    except Exception as e_debug:
-                        print(f"DEBUG LOGIN: Could not verify users table: {e_debug}")
-                    finally:
-                        conn.close()
             except pd.errors.DatabaseError:
                 st.error("Initializing database for the first time, please wait...")
                 import init_db
@@ -114,7 +117,14 @@ if not st.session_state['logged_in']:
                 sync_data()
                 st.rerun()
 
-                
+    st.markdown("---")
+    if st.button("🔓 Continue as Guest (Standard Access)"):
+        st.session_state['logged_in'] = True
+        st.session_state['username'] = 'guest'
+        st.session_state['role'] = 'Operator'
+        st.success("Access Granted as Guest")
+        st.rerun()
+        
     st.stop() # Stop execution if not logged in
 
 
@@ -433,7 +443,7 @@ with tab3:
         st.header("Maintenance Schedule")
     with col_sync:
         if st.button("🔄 Sync with Schedule Master", disabled=not is_admin):
-            import database as db_local
+            import db as db_local
             try:
                 sm = load_data("Schedule_Master")
                 # Ensure Frequency column can be parsed to int
