@@ -223,30 +223,35 @@ schedule_df['status'] = schedule_df['next_due_date'].apply(evaluate_status)
 
 
 # Tabs
-tab_names = [
-    "📊 Dashboard", 
-    "🏗️ Cranes", 
-    "📅 Maintenance Schedule", 
-    "📖 Maintenance Log", 
-    "🚨 Breakdown Log",
-    "🧰 Spare Parts",
-    "👤 Profile"
-]
-
 is_admin = str(st.session_state.get('role', '')).lower() == 'admin'
-if is_admin:
-    tab_names.append("👥 Users")
+is_guest = st.session_state.get('username', '') == 'guest'
+
+if is_guest:
+    tab_names = ["📊 Dashboard"]
+else:
+    tab_names = [
+        "📊 Dashboard", 
+        "🏗️ Cranes", 
+        "📅 Maintenance Schedule", 
+        "📖 Maintenance Log", 
+        "🚨 Breakdown Log",
+        "🧰 Spare Parts",
+        "👤 Profile"
+    ]
+    if is_admin:
+        tab_names.append("👥 Users")
 
 tabs = st.tabs(tab_names)
 tab1 = tabs[0]
-tab2 = tabs[1]
-tab3 = tabs[2]
-tab4 = tabs[3]
-tab5 = tabs[4]
-tab6 = tabs[5]
-tab7 = tabs[6]
-if is_admin:
-    tab8 = tabs[7]
+if not is_guest:
+    tab2 = tabs[1]
+    tab3 = tabs[2]
+    tab4 = tabs[3]
+    tab5 = tabs[4]
+    tab6 = tabs[5]
+    tab7 = tabs[6]
+    if is_admin:
+        tab8 = tabs[7]
 
 ### ---------------- TAB 1: Dashboard ---------------- ###
 with tab1:
@@ -289,16 +294,14 @@ with tab1:
 
     # Compute Metrics
     total_cranes = len(active_cranes_df)
-    cranes_under_maintenance = len(active_cranes_df[active_cranes_df['status'] == 'Maintenance'])
     
     due_this_week = len(active_schedule_df[active_schedule_df['status'] == 'Due Soon'])
     overdue = len(overdue_df)
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     col1.metric("Total Cranes", total_cranes)
-    col2.metric("Cranes Under Maint.", cranes_under_maintenance)
-    col3.metric("Maintenance Due (<=5 days)", due_this_week)
-    col4.metric("Overdue Maintenance", overdue)
+    col2.metric("Maintenance Due (<=5 days)", due_this_week)
+    col3.metric("Overdue Maintenance", overdue)
     
     st.divider()
     
@@ -409,136 +412,138 @@ with tab1:
         st.plotly_chart(fig2, use_container_width=True)
 
 ### ---------------- TAB 2: Cranes Master Database ---------------- ###
-with tab2:
-    st.header("Crane Master Database")
-    st.markdown("Edit crane details directly in the table below.")
-    
-    edited_cranes = st.data_editor(
-        cranes_df,
-        column_config={
-            "status": st.column_config.SelectboxColumn(
-                "Status",
-                help="Operational status of the crane",
-                options=["Active", "Inactive"],
-                required=True,
-            )
-        },
-        num_rows="dynamic" if is_admin else "fixed",
-        use_container_width=True,
-        key="cranes_editor",
-        disabled=not is_admin
-    )
-    
-    if not is_admin:
-        st.info("⚠️ Only administrators can edit crane data.")
-    
-    if st.button("Save Crane Changes", type="primary", disabled=not is_admin):
-        save_data(edited_cranes, "cranes")
-        st.success("Crane Master Database updated successfully!")
+if not is_guest:
+    with tab2:
+        st.header("Crane Master Database")
+        st.markdown("Edit crane details directly in the table below.")
+        
+        edited_cranes = st.data_editor(
+            cranes_df,
+            column_config={
+                "status": st.column_config.SelectboxColumn(
+                    "Status",
+                    help="Operational status of the crane",
+                    options=["Active", "Inactive"],
+                    required=True,
+                )
+            },
+            num_rows="dynamic" if is_admin else "fixed",
+            use_container_width=True,
+            key="cranes_editor",
+            disabled=not is_admin
+        )
+        
+        if not is_admin:
+            st.info("⚠️ Only administrators can edit crane data.")
+        
+        if st.button("Save Crane Changes", type="primary", disabled=not is_admin):
+            save_data(edited_cranes, "cranes")
+            st.success("Crane Master Database updated successfully!")
         
 ### ---------------- TAB 3: Maintenance Schedule ---------------- ###
-with tab3:
-    col_title, col_sync = st.columns([3, 1])
-    with col_title:
-        st.header("Maintenance Schedule")
-    with col_sync:
-        if st.button("🔄 Sync with Schedule Master", disabled=not is_admin):
-            import db as db_local
-            try:
-                sm = load_data("Schedule_Master")
-                # Ensure Frequency column can be parsed to int
-                sm['Frequency'] = pd.to_numeric(sm['Frequency'], errors='coerce').fillna(30)
-                freq_dict = dict(zip(sm['Schedule'], sm['Frequency']))
-            except Exception as e:
-                st.error(f"Could not load Schedule_Master from Google Sheets: {e}")
-                freq_dict = {}
-            
-            # Recalculate with cascading hierarchy logic
-            df_to_update = load_data("maintenance_schedule")
-            df_to_update['last_m_dt'] = pd.to_datetime(df_to_update['last_maintenance_date'], errors='coerce')
-            
-            for crane in df_to_update['crane_id'].unique():
-                crane_scheds = df_to_update[df_to_update['crane_id'] == crane]
-                for base in ['A', 'B', 'C']:
-                    s1_row = crane_scheds[crane_scheds['maintenance_type'] == f'S1{base}']
-                    s2_row = crane_scheds[crane_scheds['maintenance_type'] == f'S2{base}']
-                    s3_row = crane_scheds[crane_scheds['maintenance_type'] == f'S3{base}']
-                    
-                    s1_dt = s1_row['last_m_dt'].max() if not s1_row.empty else pd.NaT
-                    s2_dt = s2_row['last_m_dt'].max() if not s2_row.empty else pd.NaT
-                    s3_dt = s3_row['last_m_dt'].max() if not s3_row.empty else pd.NaT
-                    
-                    eff_s1 = max([d for d in [s1_dt, s2_dt, s3_dt] if pd.notna(d)], default=pd.NaT)
-                    eff_s2 = max([d for d in [s2_dt, s3_dt] if pd.notna(d)], default=pd.NaT)
-                    eff_s3 = max([d for d in [s3_dt] if pd.notna(d)], default=pd.NaT)
-                    
-                    if not s1_row.empty and pd.notna(eff_s1):
-                        df_to_update.loc[s1_row.index, 'eff_last'] = eff_s1
-                    if not s2_row.empty and pd.notna(eff_s2):
-                        df_to_update.loc[s2_row.index, 'eff_last'] = eff_s2
-                    if not s3_row.empty and pd.notna(eff_s3):
-                        df_to_update.loc[s3_row.index, 'eff_last'] = eff_s3
-
-            queries = []
-            for _, row in df_to_update.iterrows():
+if not is_guest:
+    with tab3:
+        col_title, col_sync = st.columns([3, 1])
+        with col_title:
+            st.header("Maintenance Schedule")
+        with col_sync:
+            if st.button("🔄 Sync with Schedule Master", disabled=not is_admin):
+                import db as db_local
                 try:
-                    last_m = row.get('eff_last')
-                    if pd.notna(last_m):
-                        m_type = row['maintenance_type']
-                        days_add = freq_dict.get(m_type, 30)
-                        next_due = (last_m + pd.Timedelta(days=days_add)).strftime('%Y-%m-%d')
-                        queries.append((last_m.strftime('%Y-%m-%d'), next_due, row['id']))
-                except:
-                    pass
-            
-            if queries:
-                db_local.execute_many_query("UPDATE maintenance_schedule SET last_maintenance_date = ?, next_due_date = ?, status='OK' WHERE id = ?", queries)
-                st.success("Synchronized successfully!")
-            st.rerun()
+                    sm = load_data("Schedule_Master")
+                    # Ensure Frequency column can be parsed to int
+                    sm['Frequency'] = pd.to_numeric(sm['Frequency'], errors='coerce').fillna(30)
+                    freq_dict = dict(zip(sm['Schedule'], sm['Frequency']))
+                except Exception as e:
+                    st.error(f"Could not load Schedule_Master from Google Sheets: {e}")
+                    freq_dict = {}
+                
+                # Recalculate with cascading hierarchy logic
+                df_to_update = load_data("maintenance_schedule")
+                df_to_update['last_m_dt'] = pd.to_datetime(df_to_update['last_maintenance_date'], errors='coerce')
+                
+                for crane in df_to_update['crane_id'].unique():
+                    crane_scheds = df_to_update[df_to_update['crane_id'] == crane]
+                    for base in ['A', 'B', 'C']:
+                        s1_row = crane_scheds[crane_scheds['maintenance_type'] == f'S1{base}']
+                        s2_row = crane_scheds[crane_scheds['maintenance_type'] == f'S2{base}']
+                        s3_row = crane_scheds[crane_scheds['maintenance_type'] == f'S3{base}']
+                        
+                        s1_dt = s1_row['last_m_dt'].max() if not s1_row.empty else pd.NaT
+                        s2_dt = s2_row['last_m_dt'].max() if not s2_row.empty else pd.NaT
+                        s3_dt = s3_row['last_m_dt'].max() if not s3_row.empty else pd.NaT
+                        
+                        eff_s1 = max([d for d in [s1_dt, s2_dt, s3_dt] if pd.notna(d)], default=pd.NaT)
+                        eff_s2 = max([d for d in [s2_dt, s3_dt] if pd.notna(d)], default=pd.NaT)
+                        eff_s3 = max([d for d in [s3_dt] if pd.notna(d)], default=pd.NaT)
+                        
+                        if not s1_row.empty and pd.notna(eff_s1):
+                            df_to_update.loc[s1_row.index, 'eff_last'] = eff_s1
+                        if not s2_row.empty and pd.notna(eff_s2):
+                            df_to_update.loc[s2_row.index, 'eff_last'] = eff_s2
+                        if not s3_row.empty and pd.notna(eff_s3):
+                            df_to_update.loc[s3_row.index, 'eff_last'] = eff_s3
     
-    # Merge crane type into schedule df
-    schedule_with_type = schedule_df.merge(cranes_df[['id', 'type']], left_on='crane_id', right_on='id', how='left')
-    schedule_with_type['Crane Type'] = schedule_with_type['type'].map({'A': 'Critical', 'B': 'Important', 'C': 'General'}).fillna('Unknown')
-
-    # Filtering
-    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
-    with col_f1:
-        f_crane_id = st.text_input("Search Crane No:", placeholder="e.g., MW-140")
-    with col_f2:
-        f_status = st.multiselect("Filter by Status:", options=["OK", "Due Soon", "Overdue"], default=["OK", "Due Soon", "Overdue"])
-    with col_f3:
-        f_type = st.multiselect("Filter Interval:", options=schedule_df['maintenance_type'].unique(), default=schedule_df['maintenance_type'].unique())
-    with col_f4:
-        f_crane_type = st.multiselect("Filter Category:", options=["Critical", "Important", "General", "Unknown"], default=["Critical", "Important", "General", "Unknown"])
-    
-    filtered_schedule = schedule_with_type[
-        (schedule_with_type['status'].isin(f_status)) & 
-        (schedule_with_type['maintenance_type'].isin(f_type)) &
-        (schedule_with_type['Crane Type'].isin(f_crane_type))
-    ]
-    
-    if f_crane_id:
-        # Case insensitive exact or partial match
-        filtered_schedule = filtered_schedule[filtered_schedule['crane_id'].str.contains(f_crane_id, case=False, na=False)]
+                queries = []
+                for _, row in df_to_update.iterrows():
+                    try:
+                        last_m = row.get('eff_last')
+                        if pd.notna(last_m):
+                            m_type = row['maintenance_type']
+                            days_add = freq_dict.get(m_type, 30)
+                            next_due = (last_m + pd.Timedelta(days=days_add)).strftime('%Y-%m-%d')
+                            queries.append((last_m.strftime('%Y-%m-%d'), next_due, row['id']))
+                    except:
+                        pass
+                
+                if queries:
+                    db_local.execute_many_query("UPDATE maintenance_schedule SET last_maintenance_date = ?, next_due_date = ?, status='OK' WHERE id = ?", queries)
+                    st.success("Synchronized successfully!")
+                st.rerun()
         
-    filtered_schedule = filtered_schedule.drop(columns=['id', 'id_x', 'id_y', 'type'], errors='ignore') # Drop merge artifacts
+        # Merge crane type into schedule df
+        schedule_with_type = schedule_df.merge(cranes_df[['id', 'type']], left_on='crane_id', right_on='id', how='left')
+        schedule_with_type['Crane Type'] = schedule_with_type['type'].map({'A': 'Critical', 'B': 'Important', 'C': 'General'}).fillna('Unknown')
     
-    # Custom styling function for dataframe display
-    def color_status(val):
-        color = ''
-        if val == 'Overdue':
-            color = 'background-color: #ff4b4b; color: white'
-        elif val == 'Due Soon':
-            color = 'background-color: #ffcc00; color: black'
-        elif val == 'OK':
-            color = 'background-color: #00cc66; color: white'
-        return color
-
-    st.dataframe(
-        filtered_schedule.style.applymap(color_status, subset=['status']),
-        use_container_width=True,
-        hide_index=True
-    )
+        # Filtering
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+        with col_f1:
+            f_crane_id = st.text_input("Search Crane No:", placeholder="e.g., MW-140")
+        with col_f2:
+            f_status = st.multiselect("Filter by Status:", options=["OK", "Due Soon", "Overdue"], default=["OK", "Due Soon", "Overdue"])
+        with col_f3:
+            f_type = st.multiselect("Filter Interval:", options=schedule_df['maintenance_type'].unique(), default=schedule_df['maintenance_type'].unique())
+        with col_f4:
+            f_crane_type = st.multiselect("Filter Category:", options=["Critical", "Important", "General", "Unknown"], default=["Critical", "Important", "General", "Unknown"])
+        
+        filtered_schedule = schedule_with_type[
+            (schedule_with_type['status'].isin(f_status)) & 
+            (schedule_with_type['maintenance_type'].isin(f_type)) &
+            (schedule_with_type['Crane Type'].isin(f_crane_type))
+        ]
+        
+        if f_crane_id:
+            # Case insensitive exact or partial match
+            filtered_schedule = filtered_schedule[filtered_schedule['crane_id'].str.contains(f_crane_id, case=False, na=False)]
+            
+        filtered_schedule = filtered_schedule.drop(columns=['id', 'id_x', 'id_y', 'type'], errors='ignore') # Drop merge artifacts
+        
+        # Custom styling function for dataframe display
+        def color_status(val):
+            color = ''
+            if val == 'Overdue':
+                color = 'background-color: #ff4b4b; color: white'
+            elif val == 'Due Soon':
+                color = 'background-color: #ffcc00; color: black'
+            elif val == 'OK':
+                color = 'background-color: #00cc66; color: white'
+            return color
+    
+        st.dataframe(
+            filtered_schedule.style.applymap(color_status, subset=['status']),
+            use_container_width=True,
+            hide_index=True
+        )
     
 @st.cache_data
 def get_schedule_frequencies():
@@ -553,261 +558,92 @@ def get_schedule_frequencies():
 schedule_freq_map = get_schedule_frequencies()
 
 ### ---------------- TAB 4: Maintenance Log ---------------- ###
-with tab4:
-    st.header("Maintenance Log")
-    
-    colA, colB = st.columns([1, 2])
-    
-    with colA:
-        st.subheader("Add New Entry")
-        # Display selected Crane ID outside the form for dynamic reloading
-        l_crane = st.selectbox("Crane ID", cranes_df['id'].unique(), key='l_crane_maint')
-        l_available_schedules = schedule_df[schedule_df['crane_id'] == l_crane]['maintenance_type'].unique()
+if not is_guest:
+    with tab4:
+        st.header("Maintenance Log")
         
-        # Fallback to the exact crane type's schedule tier base if not found yet in the schedule df
-        if len(l_available_schedules) == 0:
-            c_type_row = cranes_df[cranes_df['id'] == l_crane]
-            c_type_val = c_type_row.iloc[0]['type'] if not c_type_row.empty else 'A'
-            l_available_schedules = [f"S1{c_type_val}", f"S2{c_type_val}", f"S3{c_type_val}"]
+        colA, colB = st.columns([1, 2])
+        
+        with colA:
+            st.subheader("Add New Entry")
+            # Display selected Crane ID outside the form for dynamic reloading
+            l_crane = st.selectbox("Crane ID", cranes_df['id'].unique(), key='l_crane_maint')
+            l_available_schedules = schedule_df[schedule_df['crane_id'] == l_crane]['maintenance_type'].unique()
             
-        with st.form("log_form"):
-            l_date = st.date_input("Date")
-            l_type = st.selectbox("Maintenance Schedule", l_available_schedules)
-            
-            col_t1, col_t2 = st.columns(2)
-            with col_t1:
-                l_taking_over_d = st.date_input("Taking Over Date")
-                l_taking_over_t = st.time_input("Taking Over Time")
-            with col_t2:
-                l_handing_over_d = st.date_input("Handing Over Date")
-                l_handing_over_t = st.time_input("Handing Over Time")
+            # Fallback to the exact crane type's schedule tier base if not found yet in the schedule df
+            if len(l_available_schedules) == 0:
+                c_type_row = cranes_df[cranes_df['id'] == l_crane]
+                c_type_val = c_type_row.iloc[0]['type'] if not c_type_row.empty else 'A'
+                l_available_schedules = [f"S1{c_type_val}", f"S2{c_type_val}", f"S3{c_type_val}"]
                 
-            l_status = st.selectbox("Overall Checklist Status", ['Completed OK', 'Pending Action', 'Failed'])
-            l_remarks = st.text_area("Remarks")
-            l_photo = st.file_uploader("Upload Document/Photo", type=['jpg', 'png', 'jpeg', 'pdf'])
-            if not is_admin:
-                st.info("⚠️ Only administrators can submit logs.")
-            submitted = st.form_submit_button("Submit Log", disabled=not is_admin)
-            
-            if submitted:
-                dt_taking = datetime.combine(l_taking_over_d, l_taking_over_t).strftime('%Y-%m-%d %H:%M:%S')
-                dt_handing = datetime.combine(l_handing_over_d, l_handing_over_t).strftime('%Y-%m-%d %H:%M:%S')
-                # Get dynamic ID for maintenance_logs
-                try:
-                    max_id_df = db.get_dataframe("SELECT MAX(CAST(id AS INTEGER)) as max_id FROM maintenance_logs")
-                    new_id = int(max_id_df.iloc[0]['max_id']) + 1 if pd.notna(max_id_df.iloc[0]['max_id']) else 1
-                except:
-                    new_id = 1
+            with st.form("log_form"):
+                l_date = st.date_input("Date")
+                l_type = st.selectbox("Maintenance Schedule", l_available_schedules)
+                
+                col_t1, col_t2 = st.columns(2)
+                with col_t1:
+                    l_taking_over_d = st.date_input("Taking Over Date")
+                    l_taking_over_t = st.time_input("Taking Over Time")
+                with col_t2:
+                    l_handing_over_d = st.date_input("Handing Over Date")
+                    l_handing_over_t = st.time_input("Handing Over Time")
                     
-                # Insert into DB
-                if l_photo:
-                    with st.spinner("Uploading photo to Google Drive..."):
-                        photo_path = db.upload_image_to_drive(l_photo)
-                else:
-                    photo_path = ""
-                db.execute_query("""
-                    INSERT INTO maintenance_logs (id, date, crane_id, maintenance_type, taking_over_datetime, handing_over_datetime, checklist_status, remarks, photo_path)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (new_id, l_date.strftime('%Y-%m-%d'), l_crane, l_type, dt_taking, dt_handing, l_status, l_remarks, photo_path))
+                l_status = st.selectbox("Overall Checklist Status", ['Completed OK', 'Pending Action', 'Failed'])
+                l_remarks = st.text_area("Remarks")
+                l_photo = st.file_uploader("Upload Document/Photo", type=['jpg', 'png', 'jpeg', 'pdf'])
+                if not is_admin:
+                    st.info("⚠️ Only administrators can submit logs.")
+                submitted = st.form_submit_button("Submit Log", disabled=not is_admin)
                 
-                # Update current type and lower tier schedules (cascading resets)
-                types_to_update = [l_type]
-                if l_type.startswith('S3'):
-                    crane_letter = l_type[2:] if len(l_type) > 2 else ''
-                    types_to_update.extend([f"S2{crane_letter}", f"S1{crane_letter}"])
-                elif l_type.startswith('S2'):
-                    crane_letter = l_type[2:] if len(l_type) > 2 else ''
-                    types_to_update.extend([f"S1{crane_letter}"])
-                
-                for t in types_to_update:
-                    t_days_add = schedule_freq_map.get(t, 30) # Specific frequency for this schedule tier
-                    t_next_due = l_date + pd.Timedelta(days=t_days_add)
-                    
+                if submitted:
+                    dt_taking = datetime.combine(l_taking_over_d, l_taking_over_t).strftime('%Y-%m-%d %H:%M:%S')
+                    dt_handing = datetime.combine(l_handing_over_d, l_handing_over_t).strftime('%Y-%m-%d %H:%M:%S')
+                    # Get dynamic ID for maintenance_logs
+                    try:
+                        max_id_df = db.get_dataframe("SELECT MAX(CAST(id AS INTEGER)) as max_id FROM maintenance_logs")
+                        new_id = int(max_id_df.iloc[0]['max_id']) + 1 if pd.notna(max_id_df.iloc[0]['max_id']) else 1
+                    except:
+                        new_id = 1
+                        
+                    # Insert into DB
+                    if l_photo:
+                        with st.spinner("Uploading photo to Google Drive..."):
+                            photo_path = db.upload_image_to_drive(l_photo)
+                    else:
+                        photo_path = ""
                     db.execute_query("""
-                        UPDATE maintenance_schedule 
-                        SET last_maintenance_date = ?, next_due_date = ?, status = 'OK'
-                        WHERE crane_id = ? AND maintenance_type = ?
-                    """, (l_date.strftime('%Y-%m-%d'), t_next_due.strftime('%Y-%m-%d'), l_crane, t))
-                
-                st.success("Maintenance log added and schedule updated!")
-                st.rerun()
-
-    with colB:
-        st.subheader("Historical Logs")
-        logs_df = load_data("maintenance_logs")
-        
-        # Process photo_path to extract link and display text
-        if not logs_df.empty and 'photo_path' in logs_df.columns:
-            def extract_display_text(val):
-                if "|" in str(val):
-                    return val.split("|")[0]
-                return "View File" if str(val).startswith("http") else val
-            
-            def extract_url(val):
-                if "|" in str(val):
-                    return val.split("|")[1]
-                return val if str(val).startswith("http") else ""
-
-            # Standard st.dataframe doesn't easily support per-row display text from a separate col
-            # so we create a new temporary col for the link and hide the original if needed.
-            # But the most compatible way is to just use LinkColumn with a standard text or
-            # use a calculated column.
-            
-            # We'll use a trick: store the actual URL in the column but use the column_config to show a label.
-            # Since you wanted the PDF name, and each row has a different name, we can't use a static 'display_text'.
-            # Instead, we will use st.data_editor or st.dataframe with markdown links if supported, 
-            # or just clean up the URLs to be more readable.
-            
-            # For now, let's keep it simple and just show the filename as the link text if possible.
-            # Since ColumnConfig.LinkColumn display_text is static, we'll transform the col to just the filename
-            # and use it as a standard text column, but we'll also provide a separate 'Action' column.
-            
-            # Actually, let's just make the URL column show the filename and be clickable.
-            # Streamlit 1.31+ supports dynamic display text in LinkColumn via regex or by just 
-            # using the column values.
-            
-            # Let's try this: convert photo_path to just the URL for the link, 
-            # and create a 'Document' column for the link with the filename as display.
-            
-            logs_df['Link'] = logs_df['photo_path'].apply(extract_url)
-            logs_df['Document Name'] = logs_df['photo_path'].apply(extract_display_text)
-            
-            # Reorder or drop original
-            cols = [c for c in logs_df.columns if c != 'photo_path']
-            logs_df = logs_df[cols]
-
-        st.dataframe(
-            logs_df, 
-            use_container_width=True, 
-            hide_index=True,
-            column_config={
-                "Link": st.column_config.LinkColumn(
-                    "Download", 
-                    help="Click to download",
-                    display_text="Download PDF"
-                )
-            }
-        )
-
-### ---------------- TAB 5: Breakdown Log ---------------- ###
-with tab5:
-    st.header("Breakdown Log")
-    
-    colA, colB = st.columns([1, 2])
-    
-    with colA:
-        st.subheader("Add New Entry")
-        
-        # Display selected Crane ID outside the form for dynamic reloading
-        b_crane = st.selectbox("Crane ID", cranes_df['id'].unique(), key='b_crane_breakdown')
-        
-        c_scheds = schedule_df[schedule_df['crane_id'] == b_crane]
-        
-        st.markdown("**Current Schedule Info:**")
-        cols_s = st.columns(3)
-        
-        def get_sched_text(prefix):
-            df_s = c_scheds[c_scheds['maintenance_type'].str.startswith(prefix)]
-            if df_s.empty:
-                return f"{prefix} Not Found\nLast: N/A\nNext: N/A"
-            # Prioritize higher letter? Actually typically there is only 1 active type per prefix per crane, e.g. S1A
-            row = df_s.iloc[0]
-            return f"Type: {row['maintenance_type']}\nLast: {row['last_maintenance_date']}\nNext: {row['next_due_date']}"
-
-        with cols_s[0]:
-            st.text_area("S1 Schedule", get_sched_text('S1'), disabled=True, height=105)
-        with cols_s[1]:
-            st.text_area("S2 Schedule", get_sched_text('S2'), disabled=True, height=105)
-        with cols_s[2]:
-            st.text_area("S3 Schedule", get_sched_text('S3'), disabled=True, height=105)
-            
-        try:
-            assemblies_df = load_data("failure_assemblies")
-            assembly_options = assemblies_df['assembly_name'].tolist()
-        except:
-            assembly_options = ["LT Assembly", "CT Assembly", "Other"]
-            
-        b_failure_assembly = st.selectbox("Failure of Assembly", assembly_options)
-        
-        try:
-            comp_df = pd.read_sql_query("SELECT component_name FROM failure_components WHERE assembly_name = ?", db.get_connection(), params=(b_failure_assembly,))
-            comp_options = comp_df['component_name'].tolist() if not comp_df.empty else ["Other"]
-        except:
-            comp_options = ["Other"]
-        b_failure_component = st.selectbox("Child Component", comp_options)
-
-        try:
-            def_df = pd.read_sql_query("SELECT defect_name FROM failure_defects WHERE component_name = ?", db.get_connection(), params=(b_failure_component,))
-            def_options = def_df['defect_name'].tolist() if not def_df.empty else ["Other"]
-        except:
-            def_options = ["Other"]
-        b_failure_defect = st.selectbox("Nature of Defect", def_options)
-
-        with st.form("breakdown_form"):
-            col_rep1, col_rep2 = st.columns(2)
-            with col_rep1:
-                b_reported_d = st.date_input("Breakdown Reported Date", key="b_rep_d")
-                b_reported_t = st.time_input("Breakdown Reported Time", key="b_rep_t")
-            with col_rep2:
-                # Spacer or empty to match design
-                pass
-                
-            col_b1, col_b2 = st.columns(2)
-            with col_b1:
-                b_taking_over_d = st.date_input("Taking Over Date", key="b_tak_d")
-                b_taking_over_t = st.time_input("Taking Over Time", key="b_tak_t")
-            with col_b2:
-                b_handing_over_d = st.date_input("Handing Over Date", key="b_hand_d")
-                b_handing_over_t = st.time_input("Handing Over Time", key="b_hand_t")
-                
-            b_reported_failure = st.text_input("Reported Failure Type")
-            b_root_cause = st.text_input("Root Cause of Failure")
-            b_corrective_action = st.text_area("Corrective Action Taken")
-                
-            b_status = st.selectbox("Overall Checklist Status", ['Completed OK', 'Pending Action', 'Failed'], key="b_status")
-            b_remarks = st.text_area("Remarks", key="b_remarks")
-            b_photo = st.file_uploader("Upload Document/Photo", type=['jpg', 'png', 'jpeg', 'pdf'], key="b_photo")
-            if not is_admin:
-                st.info("⚠️ Only administrators can submit logs.")
-            b_submitted = st.form_submit_button("Submit Breakdown Log", disabled=not is_admin)
-            
-            if b_submitted:
-                dt_reported = datetime.combine(b_reported_d, b_reported_t).strftime('%Y-%m-%d %H:%M:%S')
-                dt_taking = datetime.combine(b_taking_over_d, b_taking_over_t).strftime('%Y-%m-%d %H:%M:%S')
-                dt_handing = datetime.combine(b_handing_over_d, b_handing_over_t).strftime('%Y-%m-%d %H:%M:%S')
-                # Get dynamic ID for breakdown_logs
-                try:
-                    max_id_df = db.get_dataframe("SELECT MAX(CAST(id AS INTEGER)) as max_id FROM breakdown_logs")
-                    new_id = int(max_id_df.iloc[0]['max_id']) + 1 if pd.notna(max_id_df.iloc[0]['max_id']) else 1
-                except:
-                    new_id = 1
+                        INSERT INTO maintenance_logs (id, date, crane_id, maintenance_type, taking_over_datetime, handing_over_datetime, checklist_status, remarks, photo_path)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (new_id, l_date.strftime('%Y-%m-%d'), l_crane, l_type, dt_taking, dt_handing, l_status, l_remarks, photo_path))
                     
-                # Insert into DB
-                if b_photo:
-                    with st.spinner("Uploading photograph to Google Drive..."):
-                        b_photo_path = db.upload_image_to_drive(b_photo)
-                else:
-                    b_photo_path = ""
-                db.execute_query("""
-                    INSERT INTO breakdown_logs (
-                        id, crane_id, breakdown_reported_datetime, taking_over_datetime, handing_over_datetime, 
-                        checklist_status, remarks, photo_path, failure_assembly, reported_failure_type, 
-                        root_cause_failure, corrective_action, failure_component, failure_defect
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (new_id, b_crane, dt_reported, dt_taking, dt_handing, 
-                      b_status, b_remarks, b_photo_path, b_failure_assembly, b_reported_failure, 
-                      b_root_cause, b_corrective_action, b_failure_component, b_failure_defect))
-                
-                st.success("Breakdown log added!")
-                st.rerun()
-
-    with colB:
-        st.subheader("Historical Breakdown Logs")
-        try:
-            b_logs_df = load_data("breakdown_logs")
+                    # Update current type and lower tier schedules (cascading resets)
+                    types_to_update = [l_type]
+                    if l_type.startswith('S3'):
+                        crane_letter = l_type[2:] if len(l_type) > 2 else ''
+                        types_to_update.extend([f"S2{crane_letter}", f"S1{crane_letter}"])
+                    elif l_type.startswith('S2'):
+                        crane_letter = l_type[2:] if len(l_type) > 2 else ''
+                        types_to_update.extend([f"S1{crane_letter}"])
+                    
+                    for t in types_to_update:
+                        t_days_add = schedule_freq_map.get(t, 30) # Specific frequency for this schedule tier
+                        t_next_due = l_date + pd.Timedelta(days=t_days_add)
+                        
+                        db.execute_query("""
+                            UPDATE maintenance_schedule 
+                            SET last_maintenance_date = ?, next_due_date = ?, status = 'OK'
+                            WHERE crane_id = ? AND maintenance_type = ?
+                        """, (l_date.strftime('%Y-%m-%d'), t_next_due.strftime('%Y-%m-%d'), l_crane, t))
+                    
+                    st.success("Maintenance log added and schedule updated!")
+                    st.rerun()
+    
+        with colB:
+            st.subheader("Historical Logs")
+            logs_df = load_data("maintenance_logs")
             
-            if not b_logs_df.empty and 'photo_path' in b_logs_df.columns:
+            # Process photo_path to extract link and display text
+            if not logs_df.empty and 'photo_path' in logs_df.columns:
                 def extract_display_text(val):
                     if "|" in str(val):
                         return val.split("|")[0]
@@ -817,15 +653,16 @@ with tab5:
                     if "|" in str(val):
                         return val.split("|")[1]
                     return val if str(val).startswith("http") else ""
-
-                b_logs_df['Link'] = b_logs_df['photo_path'].apply(extract_url)
-                b_logs_df['Document Name'] = b_logs_df['photo_path'].apply(extract_display_text)
+    
+                logs_df['Link'] = logs_df['photo_path'].apply(extract_url)
+                logs_df['Document Name'] = logs_df['photo_path'].apply(extract_display_text)
                 
-                cols = [c for c in b_logs_df.columns if c != 'photo_path']
-                b_logs_df = b_logs_df[cols]
-
+                # Reorder or drop original
+                cols = [c for c in logs_df.columns if c != 'photo_path']
+                logs_df = logs_df[cols]
+    
             st.dataframe(
-                b_logs_df, 
+                logs_df, 
                 use_container_width=True, 
                 hide_index=True,
                 column_config={
@@ -836,98 +673,249 @@ with tab5:
                     )
                 }
             )
-        except Exception:
-            st.info("No breakdown logs found.")
+
+### ---------------- TAB 5: Breakdown Log ---------------- ###
+if not is_guest:
+    with tab5:
+        st.header("Breakdown Log")
+        
+        colA, colB = st.columns([1, 2])
+        
+        with colA:
+            st.subheader("Add New Entry")
+            
+            # Display selected Crane ID outside the form for dynamic reloading
+            b_crane = st.selectbox("Crane ID", cranes_df['id'].unique(), key='b_crane_breakdown')
+            
+            c_scheds = schedule_df[schedule_df['crane_id'] == b_crane]
+            
+            st.markdown("**Current Schedule Info:**")
+            cols_s = st.columns(3)
+            
+            def get_sched_text(prefix):
+                df_s = c_scheds[c_scheds['maintenance_type'].str.startswith(prefix)]
+                if df_s.empty:
+                    return f"{prefix} Not Found\nLast: N/A\nNext: N/A"
+                # Prioritize higher letter? Actually typically there is only 1 active type per prefix per crane, e.g. S1A
+                row = df_s.iloc[0]
+                return f"Type: {row['maintenance_type']}\nLast: {row['last_maintenance_date']}\nNext: {row['next_due_date']}"
+    
+            with cols_s[0]:
+                st.text_area("S1 Schedule", get_sched_text('S1'), disabled=True, height=105)
+            with cols_s[1]:
+                st.text_area("S2 Schedule", get_sched_text('S2'), disabled=True, height=105)
+            with cols_s[2]:
+                st.text_area("S3 Schedule", get_sched_text('S3'), disabled=True, height=105)
+                
+            try:
+                assemblies_df = load_data("failure_assemblies")
+                assembly_options = assemblies_df['assembly_name'].tolist()
+            except:
+                assembly_options = ["LT Assembly", "CT Assembly", "Other"]
+                
+            b_failure_assembly = st.selectbox("Failure of Assembly", assembly_options)
+            
+            try:
+                comp_df = pd.read_sql_query("SELECT component_name FROM failure_components WHERE assembly_name = ?", db.get_connection(), params=(b_failure_assembly,))
+                comp_options = comp_df['component_name'].tolist() if not comp_df.empty else ["Other"]
+            except:
+                comp_options = ["Other"]
+            b_failure_component = st.selectbox("Child Component", comp_options)
+    
+            try:
+                def_df = pd.read_sql_query("SELECT defect_name FROM failure_defects WHERE component_name = ?", db.get_connection(), params=(b_failure_component,))
+                def_options = def_df['defect_name'].tolist() if not def_df.empty else ["Other"]
+            except:
+                def_options = ["Other"]
+            b_failure_defect = st.selectbox("Nature of Defect", def_options)
+    
+            with st.form("breakdown_form"):
+                col_rep1, col_rep2 = st.columns(2)
+                with col_rep1:
+                    b_reported_d = st.date_input("Breakdown Reported Date", key="b_rep_d")
+                    b_reported_t = st.time_input("Breakdown Reported Time", key="b_rep_t")
+                with col_rep2:
+                    # Spacer or empty to match design
+                    pass
+                    
+                col_b1, col_b2 = st.columns(2)
+                with col_b1:
+                    b_taking_over_d = st.date_input("Taking Over Date", key="b_tak_d")
+                    b_taking_over_t = st.time_input("Taking Over Time", key="b_tak_t")
+                with col_b2:
+                    b_handing_over_d = st.date_input("Handing Over Date", key="b_hand_d")
+                    b_handing_over_t = st.time_input("Handing Over Time", key="b_hand_t")
+                    
+                b_reported_failure = st.text_input("Reported Failure Type")
+                b_root_cause = st.text_input("Root Cause of Failure")
+                b_corrective_action = st.text_area("Corrective Action Taken")
+                    
+                b_status = st.selectbox("Overall Checklist Status", ['Completed OK', 'Pending Action', 'Failed'], key="b_status")
+                b_remarks = st.text_area("Remarks", key="b_remarks")
+                b_photo = st.file_uploader("Upload Document/Photo", type=['jpg', 'png', 'jpeg', 'pdf'], key="b_photo")
+                if not is_admin:
+                    st.info("⚠️ Only administrators can submit logs.")
+                b_submitted = st.form_submit_button("Submit Breakdown Log", disabled=not is_admin)
+                
+                if b_submitted:
+                    dt_reported = datetime.combine(b_reported_d, b_reported_t).strftime('%Y-%m-%d %H:%M:%S')
+                    dt_taking = datetime.combine(b_taking_over_d, b_taking_over_t).strftime('%Y-%m-%d %H:%M:%S')
+                    dt_handing = datetime.combine(b_handing_over_d, b_handing_over_t).strftime('%Y-%m-%d %H:%M:%S')
+                    # Get dynamic ID for breakdown_logs
+                    try:
+                        max_id_df = db.get_dataframe("SELECT MAX(CAST(id AS INTEGER)) as max_id FROM breakdown_logs")
+                        new_id = int(max_id_df.iloc[0]['max_id']) + 1 if pd.notna(max_id_df.iloc[0]['max_id']) else 1
+                    except:
+                        new_id = 1
+                        
+                    # Insert into DB
+                    if b_photo:
+                        with st.spinner("Uploading photograph to Google Drive..."):
+                            b_photo_path = db.upload_image_to_drive(b_photo)
+                    else:
+                        b_photo_path = ""
+                    db.execute_query("""
+                        INSERT INTO breakdown_logs (
+                            id, crane_id, breakdown_reported_datetime, taking_over_datetime, handing_over_datetime, 
+                            checklist_status, remarks, photo_path, failure_assembly, reported_failure_type, 
+                            root_cause_failure, corrective_action, failure_component, failure_defect
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (new_id, b_crane, dt_reported, dt_taking, dt_handing, 
+                          b_status, b_remarks, b_photo_path, b_failure_assembly, b_reported_failure, 
+                          b_root_cause, b_corrective_action, b_failure_component, b_failure_defect))
+                    
+                    st.success("Breakdown log added!")
+                    st.rerun()
+    
+        with colB:
+            st.subheader("Historical Breakdown Logs")
+            try:
+                b_logs_df = load_data("breakdown_logs")
+                
+                if not b_logs_df.empty and 'photo_path' in b_logs_df.columns:
+                    def extract_display_text(val):
+                        if "|" in str(val):
+                            return val.split("|")[0]
+                        return "View File" if str(val).startswith("http") else val
+                    
+                    def extract_url(val):
+                        if "|" in str(val):
+                            return val.split("|")[1]
+                        return val if str(val).startswith("http") else ""
+    
+                    b_logs_df['Link'] = b_logs_df['photo_path'].apply(extract_url)
+                    b_logs_df['Document Name'] = b_logs_df['photo_path'].apply(extract_display_text)
+                    
+                    cols = [c for c in b_logs_df.columns if c != 'photo_path']
+                    b_logs_df = b_logs_df[cols]
+    
+                st.dataframe(
+                    b_logs_df, 
+                    use_container_width=True, 
+                    hide_index=True,
+                    column_config={
+                        "Link": st.column_config.LinkColumn(
+                            "Download", 
+                            help="Click to download",
+                            display_text="Download PDF"
+                        )
+                    }
+                )
+            except Exception:
+                st.info("No breakdown logs found.")
 
 ### ---------------- TAB 6: Spare Parts Inventory ---------------- ###
-with tab6:
-    st.header("Spare Parts Inventory")
-    
-    colA, colB = st.columns([1, 2])
-    
-    with colA:
-        st.subheader("Add New Spare Part")
-        with st.form("spare_part_form"):
-            sp_name = st.text_input("Part Name")
-            
-            all_cranes = cranes_df['id'].unique().tolist()
-            sp_cranes = st.multiselect("Applicable Cranes", all_cranes, help="Select one or multiple cranes that this part applies to.")
-            
-            col_sp1, col_sp2 = st.columns(2)
-            with col_sp1:
-                sp_stock = st.number_input("Stock Quantity", min_value=0, step=1)
-            with col_sp2:
-                sp_min_stock = st.number_input("Minimum Stock", min_value=0, step=1)
+if not is_guest:
+    with tab6:
+        st.header("Spare Parts Inventory")
+        
+        colA, colB = st.columns([1, 2])
+        
+        with colA:
+            st.subheader("Add New Spare Part")
+            with st.form("spare_part_form"):
+                sp_name = st.text_input("Part Name")
                 
-            sp_supplier = st.text_input("Supplier")
-            sp_last_replacement = st.date_input("Last Replacement Date")
-            sp_remarks = st.text_area("Remarks")
-            if not is_admin:
-                st.info("⚠️ Only administrators can add inventory.")
-            sp_submitted = st.form_submit_button("Add Spare Part", disabled=not is_admin)
-            if sp_submitted:
-                # Get dynamic ID for spare_parts
-                try:
-                    max_id_df = db.get_dataframe("SELECT MAX(CAST(id AS INTEGER)) as max_id FROM spare_parts")
-                    new_id = int(max_id_df.iloc[0]['max_id']) + 1 if pd.notna(max_id_df.iloc[0]['max_id']) else 1
-                except:
-                    new_id = 1
+                all_cranes = cranes_df['id'].unique().tolist()
+                sp_cranes = st.multiselect("Applicable Cranes", all_cranes, help="Select one or multiple cranes that this part applies to.")
+                
+                col_sp1, col_sp2 = st.columns(2)
+                with col_sp1:
+                    sp_stock = st.number_input("Stock Quantity", min_value=0, step=1)
+                with col_sp2:
+                    sp_min_stock = st.number_input("Minimum Stock", min_value=0, step=1)
                     
-                cranes_str = ", ".join(sp_cranes) if sp_cranes else "None"
-                db.execute_query("""
-                    INSERT INTO spare_parts (
-                        id, part_name, applicable_cranes, stock_quantity, minimum_stock, supplier, last_replacement_date, remarks
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (new_id, sp_name, cranes_str, sp_stock, sp_min_stock, sp_supplier, sp_last_replacement.strftime('%Y-%m-%d'), sp_remarks))
-                st.success(f"Added {sp_name} to inventory!")
+                sp_supplier = st.text_input("Supplier")
+                sp_last_replacement = st.date_input("Last Replacement Date")
+                sp_remarks = st.text_area("Remarks")
+                if not is_admin:
+                    st.info("⚠️ Only administrators can add inventory.")
+                sp_submitted = st.form_submit_button("Add Spare Part", disabled=not is_admin)
+                if sp_submitted:
+                    # Get dynamic ID for spare_parts
+                    try:
+                        max_id_df = db.get_dataframe("SELECT MAX(CAST(id AS INTEGER)) as max_id FROM spare_parts")
+                        new_id = int(max_id_df.iloc[0]['max_id']) + 1 if pd.notna(max_id_df.iloc[0]['max_id']) else 1
+                    except:
+                        new_id = 1
+                        
+                    cranes_str = ", ".join(sp_cranes) if sp_cranes else "None"
+                    db.execute_query("""
+                        INSERT INTO spare_parts (
+                            id, part_name, applicable_cranes, stock_quantity, minimum_stock, supplier, last_replacement_date, remarks
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (new_id, sp_name, cranes_str, sp_stock, sp_min_stock, sp_supplier, sp_last_replacement.strftime('%Y-%m-%d'), sp_remarks))
+                    st.success(f"Added {sp_name} to inventory!")
+                    st.rerun()
+    
+        with colB:
+            st.subheader("Current Inventory")
+            parts_df = load_data("spare_parts")
+            
+            if parts_df.empty:
+                st.info("No spare parts currently logged in inventory.")
+                parts_df = pd.DataFrame(columns=['id', 'part_name', 'applicable_cranes', 'stock_quantity', 'minimum_stock', 'supplier', 'last_replacement_date'])
+    
+            edited_parts = st.data_editor(
+                parts_df,
+                num_rows="dynamic" if is_admin else "fixed",
+                use_container_width=True,
+                key="parts_editor",
+                disabled=not is_admin
+            )
+            
+            if not is_admin:
+                st.info("⚠️ Only administrators can edit inventory levels.")
+                
+            if st.button("Save Edits to Inventory", type="primary", disabled=not is_admin):
+                save_data(edited_parts, "spare_parts")
+                st.success("Spare Parts Inventory updated successfully!")
                 st.rerun()
 
-    with colB:
-        st.subheader("Current Inventory")
-        parts_df = load_data("spare_parts")
-        
-        if parts_df.empty:
-            st.info("No spare parts currently logged in inventory.")
-            parts_df = pd.DataFrame(columns=['id', 'part_name', 'applicable_cranes', 'stock_quantity', 'minimum_stock', 'supplier', 'last_replacement_date'])
-
-        edited_parts = st.data_editor(
-            parts_df,
-            num_rows="dynamic" if is_admin else "fixed",
-            use_container_width=True,
-            key="parts_editor",
-            disabled=not is_admin
-        )
-        
-        if not is_admin:
-            st.info("⚠️ Only administrators can edit inventory levels.")
-            
-        if st.button("Save Edits to Inventory", type="primary", disabled=not is_admin):
-            save_data(edited_parts, "spare_parts")
-            st.success("Spare Parts Inventory updated successfully!")
-            st.rerun()
-
 ### ---------------- TAB 7: Profile (Change Password) ---------------- ###
-with tab7:
-    st.header("👤 Profile")
-    st.subheader("Change My Password")
-    with st.form("change_password_form"):
-        old_pass = st.text_input("Current Password", type="password")
-        new_pass = st.text_input("New Password", type="password")
-        confirm_pass = st.text_input("Confirm New Password", type="password")
-        submitted_pwd = st.form_submit_button("Change Password")
-        
-        if submitted_pwd:
-            if not old_pass or not new_pass or not confirm_pass:
-                st.warning("All fields are required.")
-            elif new_pass != confirm_pass:
-                st.error("New passwords do not match.")
-            else:
-                user_df = pd.read_sql_query("SELECT * FROM users WHERE username = ? AND password = ?", db.get_connection(), params=(st.session_state['username'], old_pass))
-                if user_df.empty:
-                    st.error("Incorrect current password.")
+if not is_guest:
+    with tab7:
+        st.header("👤 Profile")
+        st.subheader("Change My Password")
+        with st.form("change_password_form"):
+            old_pass = st.text_input("Current Password", type="password")
+            new_pass = st.text_input("New Password", type="password")
+            confirm_pass = st.text_input("Confirm New Password", type="password")
+            submitted_pwd = st.form_submit_button("Change Password")
+            
+            if submitted_pwd:
+                if not old_pass or not new_pass or not confirm_pass:
+                    st.warning("All fields are required.")
+                elif new_pass != confirm_pass:
+                    st.error("New passwords do not match.")
                 else:
-                    db.execute_query("UPDATE users SET password = ? WHERE username = ?", (new_pass, st.session_state['username']))
-                    st.success("Password changed successfully!")
+                    user_df = pd.read_sql_query("SELECT * FROM users WHERE username = ? AND password = ?", db.get_connection(), params=(st.session_state['username'], old_pass))
+                    if user_df.empty:
+                        st.error("Incorrect current password.")
+                    else:
+                        db.execute_query("UPDATE users SET password = ? WHERE username = ?", (new_pass, st.session_state['username']))
+                        st.success("Password changed successfully!")
 
 ### ---------------- TAB 8: Users (Admin Only) ---------------- ###
 if is_admin:
