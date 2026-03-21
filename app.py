@@ -53,6 +53,12 @@ if 'username' not in st.session_state:
 if 'role' not in st.session_state:
     st.session_state['role'] = None
 
+if 'last_updated' not in st.session_state:
+    st.session_state['last_updated'] = None
+
+def mark_data_updated():
+    st.session_state['last_updated'] = datetime.now()
+
 if not st.session_state['logged_in']:
     st.title("🔒 Login")
     
@@ -133,10 +139,9 @@ col_title, col_refresh, col_logout = st.columns([4, 1, 1])
 with col_title:
     st.title("🏗️ EOT Crane Maintenance Tracking System")
     st.markdown("Maintenance Tracking System for Plant Engineers")
-with col_refresh:
-    if st.button("🔄 Refresh Data"):
-        sync_data.clear()
-        st.rerun()
+    if st.session_state['last_updated']:
+        st.markdown(f"**🕒 Data last updated on {st.session_state['last_updated'].strftime('%Y-%m-%d %H:%M:%S')}**")
+# Note: Refresh Data button removed as per user request
 with col_logout:
     if st.button("Logout"):
         st.session_state['logged_in'] = False
@@ -438,12 +443,14 @@ if not is_guest:
         
         if st.button("Save Crane Changes", type="primary", disabled=not is_admin):
             save_data(edited_cranes, "cranes")
+            mark_data_updated()
             st.success("Crane Master Database updated successfully!")
+            st.rerun()
         
 ### ---------------- TAB 3: Maintenance Schedule ---------------- ###
 if not is_guest:
     with tab3:
-        col_title, col_sync = st.columns([3, 1])
+        col_title_sched, col_sync = st.columns([3, 1])
         with col_title:
             st.header("Maintenance Schedule")
         with col_sync:
@@ -498,6 +505,7 @@ if not is_guest:
                 
                 if queries:
                     db_local.execute_many_query("UPDATE maintenance_schedule SET last_maintenance_date = ?, next_due_date = ?, status='OK' WHERE id = ?", queries)
+                    mark_data_updated()
                     st.success("Synchronized successfully!")
                 st.rerun()
         
@@ -557,6 +565,83 @@ def get_schedule_frequencies():
 
 schedule_freq_map = get_schedule_frequencies()
 
+# Centralized Save Logic for Maintenance Log
+def commit_maintenance_log(log_data):
+    dt_taking = log_data['taking_over'].strftime('%Y-%m-%d %H:%M:%S')
+    dt_handing = log_data['handing_over'].strftime('%Y-%m-%d %H:%M:%S')
+    l_date = log_data['date']
+    l_crane = log_data['crane']
+    l_type = log_data['type']
+    l_status = log_data['status']
+    l_remarks = log_data['remarks']
+    l_photo = log_data['photo']
+    
+    try:
+        max_id_df = db.get_dataframe("SELECT MAX(CAST(id AS INTEGER)) as max_id FROM maintenance_logs")
+        new_id = int(max_id_df.iloc[0]['max_id']) + 1 if pd.notna(max_id_df.iloc[0]['max_id']) else 1
+    except:
+        new_id = 1
+    
+    if l_photo:
+        with st.spinner("Uploading photograph..."):
+            photo_path = db.upload_image_to_drive(l_photo)
+    else:
+        photo_path = ""
+    
+    db.execute_query("""
+        INSERT INTO maintenance_logs (id, date, crane_id, maintenance_type, taking_over_datetime, handing_over_datetime, checklist_status, remarks, photo_path)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (new_id, l_date.strftime('%Y-%m-%d'), l_crane, l_type, dt_taking, dt_handing, l_status, l_remarks, photo_path))
+    
+    # Update cascading schedules
+    types_to_update = [l_type]
+    if l_type.startswith('S3'):
+        cl = l_type[2:] if len(l_type) > 2 else ''
+        types_to_update.extend([f"S2{cl}", f"S1{cl}"])
+    elif l_type.startswith('S2'):
+        cl = l_type[2:] if len(l_type) > 2 else ''
+        types_to_update.extend([f"S1{cl}"])
+    
+    for t in types_to_update:
+        t_days_add = schedule_freq_map.get(t, 30)
+        t_next_due = l_date + pd.Timedelta(days=t_days_add)
+        db.execute_query("""
+            UPDATE maintenance_schedule SET last_maintenance_date = ?, next_due_date = ?, status = 'OK'
+            WHERE crane_id = ? AND maintenance_type = ?
+        """, (l_date.strftime('%Y-%m-%d'), t_next_due.strftime('%Y-%m-%d'), l_crane, t))
+    
+    st.success("Entry saved successfully!")
+    mark_data_updated()
+    st.rerun()
+
+# Modal Dialog for Confirmation
+@st.dialog("⚠️ Verify Maintenance Entry")
+def confirm_maint_dialog(log_data):
+    st.markdown("Please review all details before final submission.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(f"**Crane ID:** {log_data['crane']}")
+        st.write(f"**Maintenance Date:** {log_data['date'].strftime('%Y-%m-%d')}")
+        st.write(f"**Taking Over:** {log_data['taking_over'].strftime('%Y-%m-%d %H:%M')}")
+    with col2:
+        st.write(f"**Schedule:** {log_data['type']}")
+        st.write(f"**Overall Status:** {log_data['status']}")
+        st.write(f"**Handing Over:** {log_data['handing_over'].strftime('%Y-%m-%d %H:%M')}")
+    
+    if log_data['remarks']:
+        st.info(f"**Remarks:** {log_data['remarks']}")
+    else:
+        st.write("**Remarks:** None provided.")
+    
+    st.divider()
+    c1, c2 = st.columns(2)
+    if c1.button("✅ CONFIRM & SAVE", type="primary", use_container_width=True):
+        commit_maintenance_log(log_data)
+    if c2.button("❌ CANCEL", use_container_width=True):
+        st.rerun()
+
+
 ### ---------------- TAB 4: Maintenance Log ---------------- ###
 if not is_guest:
     with tab4:
@@ -566,77 +651,47 @@ if not is_guest:
         
         with colA:
             st.subheader("Add New Entry")
-            # Display selected Crane ID outside the form for dynamic reloading
-            l_crane = st.selectbox("Crane ID", cranes_df['id'].unique(), key='l_crane_maint')
+            l_crane = st.selectbox("Crane ID *", cranes_df['id'].unique(), key='l_crane_maint')
             l_available_schedules = schedule_df[schedule_df['crane_id'] == l_crane]['maintenance_type'].unique()
             
-            # Fallback to the exact crane type's schedule tier base if not found yet in the schedule df
             if len(l_available_schedules) == 0:
                 c_type_row = cranes_df[cranes_df['id'] == l_crane]
                 c_type_val = c_type_row.iloc[0]['type'] if not c_type_row.empty else 'A'
                 l_available_schedules = [f"S1{c_type_val}", f"S2{c_type_val}", f"S3{c_type_val}"]
                 
-            with st.form("log_form"):
-                l_date = st.date_input("Date")
-                l_type = st.selectbox("Maintenance Schedule", l_available_schedules)
+            with st.form("log_form", clear_on_submit=False):
+                l_date = st.date_input("Maintenance Date *")
+                l_type = st.selectbox("Maintenance Schedule *", l_available_schedules)
                 
                 col_t1, col_t2 = st.columns(2)
                 with col_t1:
-                    l_taking_over_d = st.date_input("Taking Over Date")
-                    l_taking_over_t = st.time_input("Taking Over Time")
+                    l_taking_over_d = st.date_input("Taking Over Date *")
+                    l_taking_over_t = st.time_input("Taking Over Time *")
                 with col_t2:
-                    l_handing_over_d = st.date_input("Handing Over Date")
-                    l_handing_over_t = st.time_input("Handing Over Time")
+                    l_handing_over_d = st.date_input("Handing Over Date *")
+                    l_handing_over_t = st.time_input("Handing Over Time *")
                     
-                l_status = st.selectbox("Overall Checklist Status", ['Completed OK', 'Pending Action', 'Failed'])
-                l_remarks = st.text_area("Remarks")
-                l_photo = st.file_uploader("Upload Document/Photo", type=['jpg', 'png', 'jpeg', 'pdf'])
+                l_status = st.selectbox("Overall Checklist Status *", ['Completed OK', 'Pending Action', 'Failed'])
+                l_remarks = st.text_area("Remarks (Optional)")
+                l_photo = st.file_uploader("Upload Document/Photo (Optional)", type=['jpg', 'png', 'jpeg', 'pdf'])
+                
                 if not is_admin:
                     st.info("⚠️ Only administrators can submit logs.")
+                
                 submitted = st.form_submit_button("Submit Log", disabled=not is_admin)
                 
                 if submitted:
-                    dt_taking = datetime.combine(l_taking_over_d, l_taking_over_t).strftime('%Y-%m-%d %H:%M:%S')
-                    dt_handing = datetime.combine(l_handing_over_d, l_handing_over_t).strftime('%Y-%m-%d %H:%M:%S')
-                    # Get dynamic ID for maintenance_logs
-                    try:
-                        max_id_df = db.get_dataframe("SELECT MAX(CAST(id AS INTEGER)) as max_id FROM maintenance_logs")
-                        new_id = int(max_id_df.iloc[0]['max_id']) + 1 if pd.notna(max_id_df.iloc[0]['max_id']) else 1
-                    except:
-                        new_id = 1
-                        
-                    # Insert into DB
-                    if l_photo:
-                        with st.spinner("Uploading photo to Google Drive..."):
-                            photo_path = db.upload_image_to_drive(l_photo)
-                    else:
-                        photo_path = ""
-                    db.execute_query("""
-                        INSERT INTO maintenance_logs (id, date, crane_id, maintenance_type, taking_over_datetime, handing_over_datetime, checklist_status, remarks, photo_path)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (new_id, l_date.strftime('%Y-%m-%d'), l_crane, l_type, dt_taking, dt_handing, l_status, l_remarks, photo_path))
-                    
-                    # Update current type and lower tier schedules (cascading resets)
-                    types_to_update = [l_type]
-                    if l_type.startswith('S3'):
-                        crane_letter = l_type[2:] if len(l_type) > 2 else ''
-                        types_to_update.extend([f"S2{crane_letter}", f"S1{crane_letter}"])
-                    elif l_type.startswith('S2'):
-                        crane_letter = l_type[2:] if len(l_type) > 2 else ''
-                        types_to_update.extend([f"S1{crane_letter}"])
-                    
-                    for t in types_to_update:
-                        t_days_add = schedule_freq_map.get(t, 30) # Specific frequency for this schedule tier
-                        t_next_due = l_date + pd.Timedelta(days=t_days_add)
-                        
-                        db.execute_query("""
-                            UPDATE maintenance_schedule 
-                            SET last_maintenance_date = ?, next_due_date = ?, status = 'OK'
-                            WHERE crane_id = ? AND maintenance_type = ?
-                        """, (l_date.strftime('%Y-%m-%d'), t_next_due.strftime('%Y-%m-%d'), l_crane, t))
-                    
-                    st.success("Maintenance log added and schedule updated!")
-                    st.rerun()
+                    log_data = {
+                        'date': l_date,
+                        'crane': l_crane,
+                        'type': l_type,
+                        'taking_over': datetime.combine(l_taking_over_d, l_taking_over_t),
+                        'handing_over': datetime.combine(l_handing_over_d, l_handing_over_t),
+                        'status': l_status,
+                        'remarks': l_remarks,
+                        'photo': l_photo
+                    }
+                    confirm_maint_dialog(log_data)
     
         with colB:
             st.subheader("Historical Logs")
@@ -786,6 +841,7 @@ if not is_guest:
                           b_root_cause, b_corrective_action, b_failure_component, b_failure_defect))
                     
                     st.success("Breakdown log added!")
+                    mark_data_updated()
                     st.rerun()
     
         with colB:
@@ -867,6 +923,7 @@ if not is_guest:
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, (new_id, sp_name, cranes_str, sp_stock, sp_min_stock, sp_supplier, sp_last_replacement.strftime('%Y-%m-%d'), sp_remarks))
                     st.success(f"Added {sp_name} to inventory!")
+                    mark_data_updated()
                     st.rerun()
     
         with colB:
@@ -890,6 +947,7 @@ if not is_guest:
                 
             if st.button("Save Edits to Inventory", type="primary", disabled=not is_admin):
                 save_data(edited_parts, "spare_parts")
+                mark_data_updated()
                 st.success("Spare Parts Inventory updated successfully!")
                 st.rerun()
 
@@ -915,7 +973,9 @@ if not is_guest:
                         st.error("Incorrect current password.")
                     else:
                         db.execute_query("UPDATE users SET password = ? WHERE username = ?", (new_pass, st.session_state['username']))
+                        mark_data_updated()
                         st.success("Password changed successfully!")
+                        st.rerun()
 
 ### ---------------- TAB 8: Users (Admin Only) ---------------- ###
 if is_admin:
@@ -940,6 +1000,7 @@ if is_admin:
                         try:
                             db.execute_query("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", (new_username, new_password, new_role))
                             st.success(f"User '{new_username}' created successfully!")
+                            mark_data_updated()
                             st.rerun()
                         except Exception as e:
                             st.error("Failed to create user. Username might already exist.")
@@ -961,5 +1022,6 @@ if is_admin:
                         st.warning("No user selected.")
                     else:
                         db.execute_query("DELETE FROM users WHERE username = ?", (del_user,))
+                        mark_data_updated()
                         st.success(f"User '{del_user}' deleted!")
                         st.rerun()
