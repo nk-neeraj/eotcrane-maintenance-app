@@ -6,6 +6,10 @@ import db as db
 import sqlite3
 import io
 from docx import Document
+from docx.shared import RGBColor
+from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.oxml import parse_xml
+from docx.oxml.ns import nsdecls
 
 # Page Configuration
 st.set_page_config(page_title="EOT Crane Maintenance Tracking System", layout="wide", page_icon="🏗️")
@@ -186,6 +190,86 @@ def generate_overdue_report(df):
             except:
                 row_cells[2].text = str(row['next_due_date'])
             
+    bio = io.BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+
+def set_cell_background(cell, color):
+    """Set the background color of a table cell (color is hex string like 'FFFF00')"""
+    shading_elm = parse_xml(rf'<w:shd {nsdecls("w")} w:fill="{color}"/>')
+    cell._tc.get_or_add_tcPr().append(shading_elm)
+
+def generate_pivoted_maintenance_report(df_schedule, df_cranes):
+    doc = Document()
+    
+    # Add Main Title and Generation Date
+    doc.add_heading('Maintenance Schedule Report', 0)
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    doc.add_paragraph(f"Report Generated On: {now_str}")
+    
+    # Merge to get crane type
+    df = df_schedule.merge(df_cranes[['id', 'type']], left_on='crane_id', right_on='id', how='left')
+    df['Crane Type'] = df['type'].map({'A': 'Critical', 'B': 'Important', 'C': 'General'}).fillna('Unknown')
+    
+    # Define categories and their display names
+    categories = [('Critical', 'Type A'), ('Important', 'Type B'), ('General', 'Type C')]
+    
+    for i, (cat_name, display_name) in enumerate(categories):
+        df_cat = df[df['Crane Type'] == cat_name]
+        if df_cat.empty:
+            continue
+            
+        if i > 0:
+            doc.add_page_break()
+            
+        doc.add_heading(f'Maintenance Schedule - {display_name} ({cat_name})', level=1)
+        
+        # Get unique schedule types and cranes for this category
+        sched_types = sorted(df_cat['maintenance_type'].unique())
+        crane_ids = sorted(df_cat['crane_id'].unique())
+        
+        # Create table: Crane No + Schedule Types
+        table = doc.add_table(rows=1, cols=len(sched_types) + 1)
+        table.style = 'Table Grid'
+        
+        # Header
+        hdr_cells = table.rows[0].cells
+        hdr_cells[0].text = 'Crane No.'
+        for j, s_type in enumerate(sched_types):
+            hdr_cells[j+1].text = s_type
+            
+        for crane_id in crane_ids:
+            row1 = table.add_row().cells
+            row2 = table.add_row().cells
+            
+            row1[0].text = crane_id
+            row1[0].merge(row2[0])
+            row1[0].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+            
+            for j, s_type in enumerate(sched_types):
+                record = df_cat[(df_cat['crane_id'] == crane_id) & (df_cat['maintenance_type'] == s_type)]
+                if not record.empty:
+                    last_done = str(record.iloc[0]['last_maintenance_date'])
+                    next_due_str = str(record.iloc[0]['next_due_date'])
+                    status = record.iloc[0]['status']
+                    
+                    row1[j+1].text = f"Done: {last_done if last_done and last_done != 'None' else 'N/A'}"
+                    
+                    p = row2[j+1].paragraphs[0]
+                    r1 = p.add_run("Due: ")
+                    r2 = p.add_run(f"{next_due_str if next_due_str and next_due_str != 'None' else 'N/A'}")
+                    
+                    if status == 'Overdue':
+                        r1.font.color.rgb = RGBColor(255, 0, 0)
+                        r1.bold = True
+                        r2.font.color.rgb = RGBColor(255, 0, 0)
+                        r2.bold = True
+                    elif status == 'Due Soon':
+                        set_cell_background(row2[j+1], 'FFFF00')
+                else:
+                    row1[j+1].text = "-"
+                    row2[j+1].text = "-"
+
     bio = io.BytesIO()
     doc.save(bio)
     return bio.getvalue()
@@ -450,9 +534,19 @@ if not is_guest:
 ### ---------------- TAB 3: Maintenance Schedule ---------------- ###
 if not is_guest:
     with tab3:
-        col_title_sched, col_sync = st.columns([3, 1])
-        with col_title:
+        col_title_sched, col_report, col_sync = st.columns([2, 1, 1])
+        with col_title_sched:
             st.header("Maintenance Schedule")
+        with col_report:
+            st.markdown("<br>", unsafe_allow_html=True)
+            report_pivoted = generate_pivoted_maintenance_report(schedule_df, cranes_df)
+            st.download_button(
+                label="📄 Download Schedule Report",
+                data=report_pivoted,
+                file_name=f"Maintenance_Schedule_Report_{datetime.now().strftime('%Y%m%d')}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="download_sched_report"
+            )
         with col_sync:
             if st.button("🔄 Sync with Schedule Master", disabled=not is_admin):
                 import db as db_local
