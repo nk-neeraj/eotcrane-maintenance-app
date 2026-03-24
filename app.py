@@ -207,8 +207,8 @@ def generate_pivoted_maintenance_report(df_schedule, df_cranes):
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     doc.add_paragraph(f"Report Generated On: {now_str}")
     
-    # Merge to get crane type
-    df = df_schedule.merge(df_cranes[['id', 'type']], left_on='crane_id', right_on='id', how='left')
+    # Merge to get crane type, location, and capacity
+    df = df_schedule.merge(df_cranes[['id', 'type', 'location', 'capacity']], left_on='crane_id', right_on='id', how='left')
     df['Crane Type'] = df['type'].map({'A': 'Critical', 'B': 'Important', 'C': 'General'}).fillna('Unknown')
     
     # Define categories and their display names
@@ -242,7 +242,12 @@ def generate_pivoted_maintenance_report(df_schedule, df_cranes):
             row1 = table.add_row().cells
             row2 = table.add_row().cells
             
-            row1[0].text = crane_id
+            # Get additional crane details
+            info_row = df_cat[df_cat['crane_id'] == crane_id].iloc[0]
+            location = info_row.get('location', 'N/A')
+            capacity = info_row.get('capacity', 'N/A')
+            
+            row1[0].text = f"{crane_id}\n{location}\n({capacity})"
             row1[0].merge(row2[0])
             row1[0].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
             
