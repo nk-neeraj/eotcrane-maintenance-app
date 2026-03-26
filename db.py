@@ -252,9 +252,11 @@ def ensure_admin_exists():
             cursor.execute("INSERT INTO users (username, password, role) VALUES (?, ?, ?)", ('admin', pwd_str, 'Admin'))
             print("Default admin user created from secret.")
         else:
-            # Sync password with secret if it changed or to ensure it works
-            cursor.execute("UPDATE users SET password = ?, role = 'Admin' WHERE username = 'admin'", (pwd_str,))
-            print("Admin user password synchronized with secret.")
+            # DO NOT overwrite the password if the user already exists.
+            # This allows profile password changes to persist.
+            # We only ensure the role is 'Admin'.
+            cursor.execute("UPDATE users SET role = 'Admin' WHERE username = 'admin'")
+            print("Admin user role verified.")
         
         conn.commit()
         conn.close()
