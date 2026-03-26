@@ -139,12 +139,20 @@ if not st.session_state['logged_in']:
 
 
 
-col_title, col_refresh, col_logout = st.columns([4, 1, 1])
-with col_title:
-    st.title("🏗️ EOT Crane Maintenance Tracking System")
-    st.markdown("Maintenance Tracking System for Plant Engineers")
+st.title("🏗️ EOT Crane Maintenance Tracking System")
+
+col_info, col_inspection, col_drive, col_supervisor, col_sparing, col_logout = st.columns([2, 2, 2, 2, 2, 1])
+with col_info:
     if st.session_state['last_updated']:
-        st.markdown(f"**🕒 Data last updated on {st.session_state['last_updated'].strftime('%Y-%m-%d %H:%M:%S')}**")
+        st.markdown(f"**🕒 {st.session_state['last_updated'].strftime('%Y-%m-%d %H:%M:%S')}**")
+with col_inspection:
+    st.link_button("Safety Cell Check", "https://docs.google.com/document/d/1MF-F6MpADulb7lMhJUy1zxeHoEfV7ppc/edit?usp=sharing&ouid=103983074672171147767&rtpof=true&sd=true")
+with col_drive:
+    st.link_button("Officer Safety Check", "https://docs.google.com/spreadsheets/d/1EZqHb7qeCW8kkgCTNjaGdGLo5l-FeejY/edit?usp=sharing&ouid=103983074672171147767&rtpof=true&sd=true")
+with col_supervisor:
+    st.link_button("Supervisor Check", "https://docs.google.com/document/d/1IeCw0NXeJ83qLlyJv5aaAaAdshG2pqjZ/edit#heading=h.ena74ojzqd99")
+with col_sparing:
+    st.link_button("Request to Shop for Crane Sparing", "https://docs.google.com/document/d/1EeDaPC_Clp79c_kfLAYxkT4m09Pn2ydg2c46ZXnOt78/edit?usp=sharing")
 # Note: Refresh Data button removed as per user request
 with col_logout:
     if st.button("Logout"):
