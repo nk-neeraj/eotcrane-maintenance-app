@@ -353,9 +353,20 @@ def create_tables():
             minimum_stock INTEGER,
             supplier TEXT,
             last_replacement_date TEXT,
-            remarks TEXT
+            remarks TEXT,
+            document_path TEXT,
+            is_urgent TEXT
         )
     """)
+    # Migration for existing table
+    try:
+        cursor.execute("ALTER TABLE spare_parts ADD COLUMN document_path TEXT")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE spare_parts ADD COLUMN is_urgent TEXT")
+    except Exception:
+        pass
 
     # Failure Assemblies
     cursor.execute("CREATE TABLE IF NOT EXISTS failure_assemblies (id INTEGER PRIMARY KEY AUTOINCREMENT, assembly_name TEXT UNIQUE)")

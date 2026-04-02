@@ -282,7 +282,41 @@ def generate_pivoted_maintenance_report(df_schedule, df_cranes):
                 else:
                     row1[j+1].text = "-"
                     row2[j+1].text = "-"
+    bio = io.BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
 
+def generate_urgent_inventory_report(df):
+    doc = Document()
+    doc.add_heading('Urgent Spare Parts Inventory Report', 0)
+    
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    doc.add_paragraph(f"Report Generated On: {now_str}")
+    
+    # Filter only urgent
+    df['is_urgent'] = df['is_urgent'].apply(lambda x: str(x).lower() == 'true' or x == True)
+    df_urgent = df[df['is_urgent'] == True]
+    
+    if df_urgent.empty:
+        doc.add_paragraph('No urgent spare parts marked in inventory.')
+    else:
+        table = doc.add_table(rows=1, cols=5)
+        table.style = 'Table Grid'
+        hdr_cells = table.rows[0].cells
+        hdr_cells[0].text = 'ID No.'
+        hdr_cells[1].text = 'Part Name'
+        hdr_cells[2].text = 'Applicable Cranes'
+        hdr_cells[3].text = 'Stock Qty'
+        hdr_cells[4].text = 'Remarks'
+        
+        for _, row in df_urgent.iterrows():
+            row_cells = table.add_row().cells
+            row_cells[0].text = str(row['id'])
+            row_cells[1].text = str(row['part_name'])
+            row_cells[2].text = str(row['applicable_cranes'])
+            row_cells[3].text = str(row['stock_quantity'])
+            row_cells[4].text = str(row.get('remarks', ''))
+            
     bio = io.BytesIO()
     doc.save(bio)
     return bio.getvalue()
@@ -1012,6 +1046,7 @@ if not is_guest:
                 sp_supplier = st.text_input("Supplier")
                 sp_last_replacement = st.date_input("Last Replacement Date")
                 sp_remarks = st.text_area("Remarks")
+                sp_photo = st.file_uploader("Upload Document/Photo (Optional)", type=['jpg', 'png', 'jpeg', 'pdf'])
                 if not is_admin:
                     st.info("⚠️ Only administrators can add inventory.")
                 sp_submitted = st.form_submit_button("Add Spare Part", disabled=not is_admin)
@@ -1023,12 +1058,18 @@ if not is_guest:
                     except:
                         new_id = 1
                         
+                    if sp_photo:
+                        with st.spinner("Uploading document to Google Drive..."):
+                            sp_document_path = db.upload_image_to_drive(sp_photo)
+                    else:
+                        sp_document_path = ""
+                        
                     cranes_str = ", ".join(sp_cranes) if sp_cranes else "None"
                     db.execute_query("""
                         INSERT INTO spare_parts (
-                            id, part_name, applicable_cranes, stock_quantity, minimum_stock, supplier, last_replacement_date, remarks
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (new_id, sp_name, cranes_str, sp_stock, sp_min_stock, sp_supplier, sp_last_replacement.strftime('%Y-%m-%d'), sp_remarks))
+                            id, part_name, applicable_cranes, stock_quantity, minimum_stock, supplier, last_replacement_date, remarks, document_path
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (new_id, sp_name, cranes_str, sp_stock, sp_min_stock, sp_supplier, sp_last_replacement.strftime('%Y-%m-%d'), sp_remarks, sp_document_path))
                     st.success(f"Added {sp_name} to inventory!")
                     mark_data_updated()
                     st.rerun()
@@ -1039,24 +1080,115 @@ if not is_guest:
             
             if parts_df.empty:
                 st.info("No spare parts currently logged in inventory.")
-                parts_df = pd.DataFrame(columns=['id', 'part_name', 'applicable_cranes', 'stock_quantity', 'minimum_stock', 'supplier', 'last_replacement_date'])
-    
+                parts_df = pd.DataFrame(columns=['id', 'part_name', 'applicable_cranes', 'stock_quantity', 'minimum_stock', 'supplier', 'last_replacement_date', 'document_path', 'is_urgent'])
+            else:
+                if 'document_path' not in parts_df.columns:
+                    parts_df['document_path'] = ""
+                if 'is_urgent' not in parts_df.columns:
+                    parts_df['is_urgent'] = False
+                else:
+                    parts_df['is_urgent'] = parts_df['is_urgent'].apply(lambda x: str(x).lower() == 'true' or x == True or str(x) == '1')
+                
+                def extract_display_text(val):
+                    if pd.isna(val) or val == "":
+                        return None
+                    if "|" in str(val):
+                        return val.split("|")[0]
+                    return "View File" if str(val).startswith("http") else val
+                
+                def extract_url(val):
+                    if pd.isna(val) or val == "":
+                        return None
+                    if "|" in str(val):
+                        return val.split("|")[1]
+                    return val if str(val).startswith("http") else None
+
+                parts_df['Link'] = parts_df['document_path'].apply(extract_url)
+                parts_df['Document Name'] = parts_df['document_path'].apply(extract_display_text)
+                
+                # Remove document_path, keep rest
+                cols = [c for c in parts_df.columns if c != 'document_path']
+                
+                # Reorder to put 'is_urgent' after 'id'
+                if 'id' in cols and 'is_urgent' in cols:
+                    cols.remove('is_urgent')
+                    id_idx = cols.index('id')
+                    cols.insert(id_idx + 1, 'is_urgent')
+                    
+                parts_df = parts_df[cols]
+                
             edited_parts = st.data_editor(
                 parts_df,
                 num_rows="dynamic" if is_admin else "fixed",
                 use_container_width=True,
                 key="parts_editor",
-                disabled=not is_admin
+                disabled=not is_admin,
+                column_config={
+                    "Link": st.column_config.LinkColumn(
+                        "Download", 
+                        help="Click to download",
+                        display_text="Download PDF"
+                    ),
+                    "Document Name": st.column_config.TextColumn(
+                        "Document Name",
+                        disabled=True
+                    ),
+                    "is_urgent": st.column_config.CheckboxColumn(
+                        "Urgent?",
+                        help="Mark row as urgent",
+                        default=False
+                    )
+                }
             )
             
             if not is_admin:
                 st.info("⚠️ Only administrators can edit inventory levels.")
                 
             if st.button("Save Edits to Inventory", type="primary", disabled=not is_admin):
-                save_data(edited_parts, "spare_parts")
+                final_parts_df = edited_parts.copy()
+                if 'Document Name' in final_parts_df.columns and 'Link' in final_parts_df.columns:
+                    def reconstruct_doc_path(row):
+                        if pd.notna(row.get('Document Name')) and pd.notna(row.get('Link')):
+                            return f"{row['Document Name']}|{row['Link']}"
+                        elif pd.notna(row.get('Link')):
+                            return str(row['Link'])
+                        elif pd.notna(row.get('Document Name')):
+                            return str(row['Document Name'])
+                        return ""
+                    final_parts_df['document_path'] = final_parts_df.apply(reconstruct_doc_path, axis=1)
+                    final_parts_df.drop(columns=['Link', 'Document Name'], inplace=True, errors='ignore')
+                    
+                final_parts_df['is_urgent'] = final_parts_df['is_urgent'].astype(str)
+                save_data(final_parts_df, "spare_parts")
                 mark_data_updated()
                 st.success("Spare Parts Inventory updated successfully!")
                 st.rerun()
+                
+            st.markdown("<br>", unsafe_allow_html=True)
+            report_bytes = generate_urgent_inventory_report(parts_df)
+            st.download_button(
+                label="📄 Download Urgent Parts Report",
+                data=report_bytes,
+                file_name=f"Urgent_Spare_Parts_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+
+            st.markdown("---")
+            st.subheader("Update Document for Existing Part")
+            if not parts_df.empty:
+                with st.form("update_sp_doc_form"):
+                    part_id_to_update = st.selectbox("Select Part to Update Document", parts_df['id'].astype(str) + " - " + parts_df['part_name'])
+                    new_sp_photo = st.file_uploader("Upload New Document/Photo", type=['jpg', 'png', 'jpeg', 'pdf'])
+                    update_doc_submitted = st.form_submit_button("Update Document", disabled=not is_admin)
+                    
+                    if update_doc_submitted and new_sp_photo:
+                        with st.spinner("Uploading document to Google Drive..."):
+                            new_doc_path = db.upload_image_to_drive(new_sp_photo)
+                        selected_id = part_id_to_update.split(" - ")[0]
+                        db.execute_query("UPDATE spare_parts SET document_path = ? WHERE id = ?", (new_doc_path, selected_id))
+                        st.success("Document updated successfully!")
+                        mark_data_updated()
+                        st.rerun()
 
 ### ---------------- TAB 7: Profile (Change Password) ---------------- ###
 if not is_guest:
