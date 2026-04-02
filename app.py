@@ -655,7 +655,7 @@ if not is_guest:
             return color
     
         st.dataframe(
-            filtered_schedule.style.applymap(color_status, subset=['status']),
+            filtered_schedule.style.map(color_status, subset=['status']),
             use_container_width=True,
             hide_index=True
         )
