@@ -1088,6 +1088,7 @@ if not is_guest:
                     parts_df['is_urgent'] = False
                 else:
                     parts_df['is_urgent'] = parts_df['is_urgent'].apply(lambda x: str(x).lower() == 'true' or x == True or str(x) == '1')
+                parts_df['is_urgent'] = parts_df['is_urgent'].astype(bool)
                 
                 def extract_display_text(val):
                     if pd.isna(val) or val == "":
