@@ -431,11 +431,16 @@ with tab1:
     # Compute Metrics
     total_cranes = len(active_cranes_df)
     
+    if 'overage' in active_cranes_df.columns:
+        overage_cranes_count = active_cranes_df['overage'].astype(str).str.strip().str.upper().eq('YES').sum()
+    else:
+        overage_cranes_count = 0
+    
     due_this_week = len(active_schedule_df[active_schedule_df['status'] == 'Due Soon'])
     overdue = len(overdue_df)
     
     col1, col2, col3 = st.columns(3)
-    col1.metric("Total Cranes", total_cranes)
+    col1.metric("Total Cranes", total_cranes, f"{overage_cranes_count} Overage", delta_color="inverse")
     col2.metric("Maintenance Due (<=5 days)", due_this_week)
     col3.metric("Overdue Maintenance", overdue)
     
@@ -516,6 +521,7 @@ with tab1:
         st.info("No overdue maintenance found! ✅")
     
     st.divider()
+
     
     st.subheader("All Maintenance Statuses")
     if 'type' in active_cranes_df.columns:
@@ -546,6 +552,18 @@ with tab1:
                       title="Status distribution across Schedules",
                       color_discrete_map={"OK": "#00cc66", "Due Soon": "#ffcc00", "Overdue": "#ff4b4b"})
         st.plotly_chart(fig2, use_container_width=True)
+
+    st.divider()
+    
+    st.subheader("Overage Cranes Details")
+    if 'overage' in active_cranes_df.columns:
+        overage_details_df = active_cranes_df[active_cranes_df['overage'].astype(str).str.strip().str.upper().eq('YES')]
+        if not overage_details_df.empty:
+            st.dataframe(overage_details_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No overage active cranes found! ✅")
+    else:
+        st.info("Overage tracking not available. ✅")
 
 ### ---------------- TAB 2: Cranes Master Database ---------------- ###
 if not is_guest:
