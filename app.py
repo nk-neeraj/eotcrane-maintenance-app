@@ -354,6 +354,31 @@ except Exception as e:
     db.pull_all_from_gsheets()
     st.rerun()
 
+# Dynamically Format Installation Date and Calculate Overage
+if 'installation_year' in cranes_df.columns:
+    # Ensure it's treated as a datetime object for internal computation
+    cranes_df['installation_date_dt'] = pd.to_datetime(cranes_df['installation_year'], errors='coerce')
+    
+    # Store it as date objects so st.data_editor uses DateColumn properly
+    cranes_df['installation_year'] = cranes_df['installation_date_dt'].dt.date
+    
+    # Calculate Overage dynamically (Assuming 35 years as per existing data)
+    today_dt = datetime.now()
+    
+    def calc_age(d):
+        if pd.isna(d): return None
+        return round((today_dt - d).days / 365.25, 2)
+
+    def calc_overage(d):
+        if pd.isna(d): return 'NO'
+        years = (today_dt - d).days / 365.25
+        return 'YES' if years >= 35 else 'NO'
+
+    cranes_df['current_age'] = cranes_df['installation_date_dt'].apply(calc_age)
+    cranes_df['overage'] = cranes_df['installation_date_dt'].apply(calc_overage)
+    
+    cranes_df = cranes_df.drop(columns=['installation_date_dt'])
+
 # Recalculate status dynamically based on current date
 schedule_df['status'] = schedule_df['next_due_date'].apply(evaluate_status)
 
@@ -571,14 +596,74 @@ if not is_guest:
         st.header("Crane Master Database")
         st.markdown("Edit crane details directly in the table below.")
         
+        # --- Filters for Crane Master ---
+        def get_unique_options(col_name):
+            if col_name not in cranes_df.columns: return ["(Empty)"]
+            vals = cranes_df[col_name].fillna("").astype(str).str.strip().unique()
+            return sorted([v for v in vals if v]) + ["(Empty)"]
+            
+        def apply_filter(col_series, selected):
+            if not selected: # If nothing is selected, display all
+                return pd.Series(True, index=col_series.index)
+            col_str = col_series.fillna("").astype(str).str.strip()
+            mask = col_str.isin(selected)
+            if "(Empty)" in selected:
+                mask = mask | (col_str == "")
+            return mask
+
+        col_c1, col_c2, col_c3, col_c4, col_c5, col_c6 = st.columns(6)
+        
+        with col_c1:
+            opts_status = get_unique_options('status')
+            f_db_status = st.multiselect("Filter by Status:", options=opts_status, default=opts_status)
+        with col_c2:
+            f_db_overage = st.multiselect("Filter by Overage:", options=['YES', 'NO'], default=['YES', 'NO'])
+        with col_c3:
+            opts_make = get_unique_options('make')
+            f_db_make = st.multiselect("Filter by Make:", options=opts_make, default=opts_make)
+        with col_c4:
+            opts_loc = get_unique_options('location')
+            f_db_location = st.multiselect("Filter by Location:", options=opts_loc, default=opts_loc)
+        with col_c5:
+            opts_type = get_unique_options('type')
+            f_db_type = st.multiselect("Filter by Type:", options=opts_type, default=opts_type)
+        with col_c6:
+            opts_cap = get_unique_options('capacity')
+            f_db_capacity = st.multiselect("Filter by Capacity:", options=opts_cap, default=opts_cap)
+            
+        filtered_cranes_df = cranes_df[
+            apply_filter(cranes_df['status'], f_db_status) &
+            apply_filter(cranes_df['overage'], f_db_overage) &
+            apply_filter(cranes_df['make'], f_db_make) &
+            apply_filter(cranes_df['location'], f_db_location) &
+            apply_filter(cranes_df['type'], f_db_type) &
+            apply_filter(cranes_df['capacity'], f_db_capacity)
+        ]
+        # --------------------------------
+        
         edited_cranes = st.data_editor(
-            cranes_df,
+            filtered_cranes_df,
             column_config={
                 "status": st.column_config.SelectboxColumn(
                     "Status",
                     help="Operational status of the crane",
-                    options=["Active", "Inactive"],
+                    options=["Active", "Inactive", "Condemned"],
                     required=True,
+                ),
+                "installation_year": st.column_config.DateColumn(
+                    "Installation Year",
+                    help="Date of crane installation",
+                    format="YYYY-MM-DD",
+                ),
+                "current_age": st.column_config.NumberColumn(
+                    "Current Age (Years)",
+                    help="Calculated dynamically from installation year",
+                    disabled=True,
+                ),
+                "overage": st.column_config.TextColumn(
+                    "Overage",
+                    help="YES if older than 35 years",
+                    disabled=True,
                 )
             },
             num_rows="dynamic" if is_admin else "fixed",
@@ -591,7 +676,11 @@ if not is_guest:
             st.info("⚠️ Only administrators can edit crane data.")
         
         if st.button("Save Crane Changes", type="primary", disabled=not is_admin):
-            save_data(edited_cranes, "cranes")
+            # To ensure we don't drop rows hidden by the filters, we replace only the visible filtered subset
+            unfiltered_rest = cranes_df.drop(index=filtered_cranes_df.index)
+            final_df = pd.concat([unfiltered_rest, edited_cranes], ignore_index=True)
+            
+            save_data(final_df, "cranes")
             mark_data_updated()
             st.success("Crane Master Database updated successfully!")
             st.rerun()

@@ -109,7 +109,7 @@ def push_table_to_gsheets(table_name):
             ws = sheet.add_worksheet(title=table_name, rows=str(max(100, len(df) + 10)), cols=str(max(20, len(df.columns) + 5)))
         
         if not df.empty:
-            date_cols = ['last_maintenance_date', 'next_due_date', 'date', 'last_replacement_date']
+            date_cols = ['last_maintenance_date', 'next_due_date', 'date', 'last_replacement_date', 'installation_year']
             datetime_cols = ['taking_over_datetime', 'handing_over_datetime', 'breakdown_reported_datetime']
             
             for col in date_cols:
@@ -153,7 +153,7 @@ def pull_all_from_gsheets():
                 headers = data[0]
                 records = data[1:]
                 df = pd.DataFrame(records, columns=headers)
-                date_cols = ['last_maintenance_date', 'next_due_date', 'date', 'last_replacement_date']
+                date_cols = ['last_maintenance_date', 'next_due_date', 'date', 'last_replacement_date', 'installation_year']
                 datetime_cols = ['taking_over_datetime', 'handing_over_datetime', 'breakdown_reported_datetime']
                 
                 for col in date_cols:
